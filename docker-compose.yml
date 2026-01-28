@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: process_mapping_postgres
+    environment:
+      POSTGRES_USER: webcms
+      POSTGRES_PASSWORD: webcms2026
+      POSTGRES_DB: process_mapping
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
