@@ -12,6 +12,11 @@ export const sequelize = new Sequelize(env.databaseUrl, {
 
 export async function connectDb() {
   try {
+    // Ensure all models + associations are registered before syncing.
+    // connectDb() is called before createApp(), so controllers/routes may not
+    // have been imported yet.
+    await import("../models/initModels.js");
+
     await sequelize.authenticate();
     console.log(`[db] ✅ Connected to PostgreSQL`);
     if (env.nodeEnv === "development") {

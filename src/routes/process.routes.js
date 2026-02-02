@@ -9,15 +9,17 @@ import {
   getLogigramme,
   getPath,
   getSipocRows,
+  listAll,
   patchProcess,
   replaceLogigramme,
   replaceSipoc,
   resolveCodes,
   resolveIdByCode
-} from "../controllers/processController.js";
+} from "../controllers/process.controller.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
+// Public + protected routes for /api/processes
 export const processRoutes = Router();
 
 processRoutes.get("/cartography", asyncHandler(getCartography));
@@ -38,3 +40,14 @@ processRoutes.put("/:id/sipoc", requireAuth, requireAdmin, asyncHandler(replaceS
 processRoutes.put("/:id/logigramme", requireAuth, requireAdmin, asyncHandler(replaceLogigramme));
 
 processRoutes.delete("/:id", requireAuth, requireAdmin, asyncHandler(deleteProcess));
+
+// Admin-only routes for /api/admin/processes
+export const adminProcessRoutes = Router();
+
+adminProcessRoutes.use(requireAuth, requireAdmin);
+
+adminProcessRoutes.get("/", asyncHandler(listAll));
+adminProcessRoutes.get("/:id", asyncHandler(getById));
+adminProcessRoutes.post("/", asyncHandler(createProcess));
+adminProcessRoutes.patch("/:id", asyncHandler(patchProcess));
+adminProcessRoutes.delete("/:id", asyncHandler(deleteProcess));

@@ -51,18 +51,9 @@ export const Process = sequelize.define(
       type: DataTypes.JSONB,
       allowNull: true,
     },
-    stakeholders: {
-      type: DataTypes.JSONB,
-      allowNull: true,
-    },
     referenceDocuments: {
       type: DataTypes.JSONB,
       allowNull: true,
-    },
-    sipoc: {
-      type: DataTypes.JSONB,
-      // Always store both phases + rows (UI can render grouped phases)
-      defaultValue: { phases: [], rows: [] },
     },
     logigramme: {
       type: DataTypes.JSONB,
@@ -85,6 +76,3 @@ export const Process = sequelize.define(
     ],
   }
 );
-
-Process.hasMany(Process, { foreignKey: "parentProcessId", as: "children" });
-Process.belongsTo(Process, { foreignKey: "parentProcessId", as: "parent" });
