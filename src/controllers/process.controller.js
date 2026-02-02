@@ -1,6 +1,9 @@
 import { Op } from "sequelize";
 import { Process } from "../models/Process.js";
 import { Stakeholder } from "../models/Stakeholder.js";
+import { Sipoc } from "../models/Sipoc.js";
+import { SipocPhase } from "../models/SipocPhase.js";
+import { SipocRow } from "../models/SipocRow.js";
 
 // ============================================================================
 // HELPERS - Validation & Transformation
@@ -28,11 +31,80 @@ function toJSON(model) {
 }
 
 /**
+ * Converts a SipocRow model to DTO format
+ */
+function sipocRowToDto(row) {
+  return {
+    ref: row.ref ?? undefined,
+    phase: row.phase ?? undefined,
+    numero: row.numero ?? undefined,
+    processusFournisseur: row.processusFournisseur ?? undefined,
+    entrees: row.entrees ?? undefined,
+    ressources: row.ressources ?? undefined,
+    designation: row.designation ?? undefined,
+    sorties: row.sorties ?? undefined,
+    processusClient: row.processusClient ?? undefined,
+    designationProcessusVendre: row.designationProcessusVendre ?? undefined,
+    activitePhase: row.activitePhase ?? undefined,
+    sortiesProcessusVendre: row.sortiesProcessusVendre ?? undefined,
+    designationProcessusClient: row.designationProcessusClient ?? undefined,
+    sortiesProcessusClient: row.sortiesProcessusClient ?? undefined,
+  };
+}
+
+/**
+ * Converts a SipocPhase model (with rows) to DTO format
+ */
+function sipocPhaseToDto(phase) {
+  return {
+    key: phase.key ?? undefined,
+    name: phase.name ?? undefined,
+    rows: (phase.rows || []).map(sipocRowToDto),
+  };
+}
+
+/**
+ * Fetches SIPOC data for a process from normalized tables
+ * Returns { phases: [], rows: [] } format for compatibility
+ */
+async function fetchSipocForProcess(processId) {
+  const sipoc = await Sipoc.findOne({
+    where: { processId },
+    include: [
+      {
+        model: SipocPhase,
+        as: "phases",
+        include: [
+          {
+            model: SipocRow,
+            as: "rows",
+          },
+        ],
+      },
+    ],
+    order: [
+      [{ model: SipocPhase, as: "phases" }, "order", "ASC"],
+      [{ model: SipocPhase, as: "phases" }, { model: SipocRow, as: "rows" }, "order", "ASC"],
+    ],
+  });
+
+  if (!sipoc) {
+    return { phases: [], rows: [] };
+  }
+
+  const phases = (sipoc.phases || []).map(sipocPhaseToDto);
+  const rows = phases.flatMap((p) => p.rows || []);
+
+  return { phases, rows };
+}
+
+/**
  * Transforms a process and its children into JSON format.
  * Recursively converts each child to JSON.
  */
-function transformProcessWithChildren(process) {
+function transformProcessWithChildren(process, sipocData = null) {
   const json = toJSON(process);
+
   // Convert associated stakeholders objects to an array of names (front compatibility)
   if (Array.isArray(json.stakeholders)) {
     json.stakeholderIds = json.stakeholders.map((s) => s.id).filter(Boolean);
@@ -41,6 +113,12 @@ function transformProcessWithChildren(process) {
   if (Array.isArray(json.children)) {
     json.children = json.children.map(toJSON);
   }
+
+  // Add SIPOC data if provided
+  if (sipocData) {
+    json.sipoc = sipocData;
+  }
+
   return json;
 }
 
@@ -53,68 +131,6 @@ function processBaseIncludes() {
       attributes: ["id", "name"],
     },
   ];
-}
-
-/**
- * Builds a Map of phase names -> rows, from a flat row array.
- * Ensures each row has a `phase` property set to its phase name.
- * Returns { phaseOrder, map }
- */
-function buildPhaseMapFromRows(rows) {
-  const phaseOrder = [];
-  const map = new Map();
-
-  for (const r of rows) {
-    const phaseName = String(r?.phase || "Phase unique");
-    if (!map.has(phaseName)) {
-      map.set(phaseName, []);
-      phaseOrder.push(phaseName);
-    }
-    map.get(phaseName).push({ ...r, phase: phaseName });
-  }
-
-  return { phaseOrder, map };
-}
-
-/**
- * Normalizes a SIPOC object to ensure it has both `phases` and `rows`.
- * - If phases are provided, uses them (ensuring each row has phase property).
- * - Otherwise, builds phases from row.phase property.
- * - Returns { phases, rows } where rows is flattened from phases.
- */
-function normalizeSipoc(input) {
-  const sipoc = input && typeof input === "object" ? input : {};
-  const rows = Array.isArray(sipoc.rows) ? sipoc.rows : [];
-  const phasesInput = Array.isArray(sipoc.phases) ? sipoc.phases : null;
-
-  // Parse phases from input if provided
-  if (phasesInput && phasesInput.length > 0) {
-    const phases = phasesInput
-      .map((p, idx) => {
-        const name = String(p?.name || p?.label || `Phase ${idx + 1}`);
-        const key = String(p?.key || p?.id || name);
-        const phaseRows = Array.isArray(p?.rows) ? p.rows : [];
-        return {
-          key,
-          name,
-          rows: phaseRows.map((r) => ({ ...r, phase: r?.phase || name })),
-        };
-      })
-      .filter((p) => p.name);
-
-    const flattenedRows = phases.flatMap((p) => p.rows);
-    return { phases, rows: flattenedRows };
-  }
-
-  // Build phases from row.phase if no phases were provided
-  const { phaseOrder, map } = buildPhaseMapFromRows(rows);
-  const phases = phaseOrder.map((name, idx) => ({
-    key: `${idx + 1}`,
-    name,
-    rows: map.get(name) || [],
-  }));
-
-  return { phases, rows: phases.flatMap((p) => p.rows) };
 }
 
 // ============================================================================
@@ -139,7 +155,7 @@ export async function listAll(req, res) {
 }
 
 /**
- * Retrieves a process by code, including its direct children.
+ * Retrieves a process by code, including its direct children and SIPOC.
  */
 export async function getByCode(req, res) {
   const { code } = req.params;
@@ -149,10 +165,10 @@ export async function getByCode(req, res) {
     include: [
       ...processBaseIncludes(),
       {
-      model: Process,
-      as: "children",
-      attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
-      order: [["orderInParent", "ASC"]],
+        model: Process,
+        as: "children",
+        attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
+        order: [["orderInParent", "ASC"]],
       },
     ],
   });
@@ -161,11 +177,14 @@ export async function getByCode(req, res) {
     return res.status(404).json({ error: "Not Found" });
   }
 
-  res.json({ data: transformProcessWithChildren(process) });
+  // Fetch SIPOC data from normalized tables
+  const sipocData = await fetchSipocForProcess(process.id);
+
+  res.json({ data: transformProcessWithChildren(process, sipocData) });
 }
 
 /**
- * Retrieves a process by ID, including its direct children.
+ * Retrieves a process by ID, including its direct children and SIPOC.
  */
 export async function getById(req, res) {
   const id = validateUuid(req.params.id);
@@ -174,10 +193,10 @@ export async function getById(req, res) {
     include: [
       ...processBaseIncludes(),
       {
-      model: Process,
-      as: "children",
-      attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
-      order: [["orderInParent", "ASC"]],
+        model: Process,
+        as: "children",
+        attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
+        order: [["orderInParent", "ASC"]],
       },
     ],
   });
@@ -186,7 +205,10 @@ export async function getById(req, res) {
     return res.status(404).json({ error: "Not Found" });
   }
 
-  res.json({ data: transformProcessWithChildren(process) });
+  // Fetch SIPOC data from normalized tables
+  const sipocData = await fetchSipocForProcess(process.id);
+
+  res.json({ data: transformProcessWithChildren(process, sipocData) });
 }
 
 /**
@@ -288,14 +310,16 @@ async function buildPath(processId) {
 export async function getSipocRows(req, res) {
   const id = validateUuid(req.params.id);
 
-  const process = await Process.findByPk(id, { attributes: ["id", "sipoc"] });
+  const process = await Process.findByPk(id, { attributes: ["id"] });
 
   if (!process) {
     return res.status(404).json({ error: "Not Found" });
   }
 
-  const rows = process.sipoc?.rows || [];
-  res.json({ data: rows });
+  // Fetch SIPOC from normalized tables
+  const sipocData = await fetchSipocForProcess(id);
+
+  res.json({ data: sipocData.rows });
 }
 
 export async function getLogigramme(req, res) {
@@ -465,23 +489,73 @@ async function applyStakeholders(process, input) {
 // ============================================================================
 
 /**
- * Replaces the SIPOC data for a process.
- * Normalizes the input to ensure consistent phase/rows structure.
+ * Replaces the SIPOC data for a process using normalized tables.
  */
 export async function replaceSipoc(req, res) {
   const id = validateUuid(req.params.id);
   const { sipoc } = req.body;
 
-  const normalized = normalizeSipoc(sipoc);
-
-  const [updated] = await Process.update({ sipoc: normalized }, { where: { id } });
-
-  if (!updated) {
+  const process = await Process.findByPk(id, { attributes: ["id"] });
+  if (!process) {
     return res.status(404).json({ error: "Not Found" });
   }
 
-  const process = await Process.findByPk(id);
-  res.json({ data: toJSON(process) });
+  // Parse input - accept both { phases: [] } and { rows: [] } formats
+  let phasesInput = [];
+  if (sipoc?.phases && Array.isArray(sipoc.phases)) {
+    phasesInput = sipoc.phases;
+  } else if (sipoc?.rows && Array.isArray(sipoc.rows)) {
+    // Convert flat rows to single phase
+    phasesInput = [{ key: "default", name: "Phase unique", rows: sipoc.rows }];
+  }
+
+  // Find or create Sipoc
+  const [sipocRecord] = await Sipoc.findOrCreate({
+    where: { processId: id },
+    defaults: { processId: id },
+  });
+
+  // Delete existing phases (cascade will delete rows)
+  await SipocPhase.destroy({ where: { sipocId: sipocRecord.id } });
+
+  // Create new phases and rows
+  for (let phaseIndex = 0; phaseIndex < phasesInput.length; phaseIndex++) {
+    const phaseDto = phasesInput[phaseIndex];
+
+    const newPhase = await SipocPhase.create({
+      sipocId: sipocRecord.id,
+      key: phaseDto.key ?? null,
+      name: phaseDto.name ?? null,
+      order: phaseIndex,
+    });
+
+    const rows = Array.isArray(phaseDto.rows) ? phaseDto.rows : [];
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const rowDto = rows[rowIndex];
+      await SipocRow.create({
+        sipocPhaseId: newPhase.id,
+        order: rowIndex,
+        ref: rowDto.ref ?? null,
+        phase: rowDto.phase ?? phaseDto.name ?? null,
+        numero: rowDto.numero != null ? String(rowDto.numero) : null,
+        processusFournisseur: rowDto.processusFournisseur ?? null,
+        entrees: rowDto.entrees ?? null,
+        ressources: rowDto.ressources ?? null,
+        designation: rowDto.designation ?? null,
+        sorties: rowDto.sorties ?? null,
+        processusClient: rowDto.processusClient ?? null,
+        designationProcessusVendre: rowDto.designationProcessusVendre ?? null,
+        activitePhase: rowDto.activitePhase ?? null,
+        sortiesProcessusVendre: rowDto.sortiesProcessusVendre ?? null,
+        designationProcessusClient: rowDto.designationProcessusClient ?? null,
+        sortiesProcessusClient: rowDto.sortiesProcessusClient ?? null,
+      });
+    }
+  }
+
+  // Reload and return
+  const sipocData = await fetchSipocForProcess(id);
+  res.json({ data: { id, sipoc: sipocData } });
 }
 
 /**
