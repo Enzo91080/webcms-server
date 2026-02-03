@@ -47,10 +47,11 @@ export const Process = sequelize.define(
       type: DataTypes.TEXT,
       defaultValue: "",
     },
-    pilots: {
+    objectivesBlocks: {
       type: DataTypes.JSONB,
       allowNull: true,
     },
+    // pilots: ancien champ JSONB supprimé, remplacé par relation many-to-many (process_pilots)
     referenceDocuments: {
       type: DataTypes.JSONB,
       allowNull: true,

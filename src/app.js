@@ -3,7 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 import { env } from "./config/env.js";
-import { authRoutes, processRoutes, adminProcessRoutes, adminStakeholderRoutes, adminProcessSipocRoutes } from "./routes/index.js";
+import { authRoutes, processRoutes, adminProcessRoutes, adminStakeholderRoutes, adminPilotRoutes, adminProcessSipocRoutes } from "./routes/index.js";
 import { notFound, errorHandler } from "./middleware/index.js";
 
 export function createApp() {
@@ -20,6 +20,7 @@ export function createApp() {
   app.use("/api/admin/processes", adminProcessRoutes);
   app.use("/api/admin/processes", adminProcessSipocRoutes);
   app.use("/api/admin/stakeholders", adminStakeholderRoutes);
+  app.use("/api/admin/pilots", adminPilotRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

@@ -1,6 +1,7 @@
 import { Op } from "sequelize";
 import { Process } from "../models/Process.js";
 import { Stakeholder } from "../models/Stakeholder.js";
+import { Pilot } from "../models/Pilot.js";
 import { Sipoc } from "../models/Sipoc.js";
 import { SipocPhase } from "../models/SipocPhase.js";
 import { SipocRow } from "../models/SipocRow.js";
@@ -110,6 +111,13 @@ function transformProcessWithChildren(process, sipocData = null) {
     json.stakeholderIds = json.stakeholders.map((s) => s.id).filter(Boolean);
     json.stakeholders = json.stakeholders.map((s) => s.name).filter(Boolean);
   }
+
+  // Convert associated pilots to pilotIds + keep pilots array for display
+  if (Array.isArray(json.pilots)) {
+    json.pilotIds = json.pilots.map((p) => p.id).filter(Boolean);
+    // Keep pilots array with full objects for display (id, name, isActive)
+  }
+
   if (Array.isArray(json.children)) {
     json.children = json.children.map(toJSON);
   }
@@ -129,6 +137,12 @@ function processBaseIncludes() {
       as: "stakeholders",
       through: { attributes: [] },
       attributes: ["id", "name"],
+    },
+    {
+      model: Pilot,
+      as: "pilots",
+      through: { attributes: [] },
+      attributes: ["id", "name", "isActive"],
     },
   ];
 }
@@ -589,4 +603,47 @@ export async function deleteProcess(req, res) {
   }
 
   res.json({ data: { ok: true } });
+}
+
+// ============================================================================
+// ADMIN API - Process Pilots Management
+// ============================================================================
+
+/**
+ * Sets the pilots for a process (many-to-many).
+ * PUT /api/admin/processes/:id/pilots
+ * Body: { pilotIds: string[] }
+ */
+export async function adminSetProcessPilots(req, res) {
+  const id = validateUuid(req.params.id);
+
+  const pilotIds = req.body?.pilotIds;
+  if (!Array.isArray(pilotIds)) {
+    return res.status(400).json({ error: "pilotIds must be an array" });
+  }
+
+  const process = await Process.findByPk(id);
+  if (!process) {
+    return res.status(404).json({ error: "Process not found" });
+  }
+
+  // Validate that all pilotIds exist
+  if (pilotIds.length > 0) {
+    const existingPilots = await Pilot.findAll({
+      where: { id: pilotIds },
+      attributes: ["id"],
+    });
+    const existingIds = new Set(existingPilots.map((p) => p.id));
+    const invalidIds = pilotIds.filter((pid) => !existingIds.has(pid));
+    if (invalidIds.length > 0) {
+      return res
+        .status(400)
+        .json({ error: `Invalid pilot IDs: ${invalidIds.join(", ")}` });
+    }
+  }
+
+  // Replace associations
+  await process.setPilots(pilotIds);
+
+  res.json({ data: { ok: true, pilotIds } });
 }

@@ -4,6 +4,7 @@
 import { Process } from "./Process.js";
 import { User } from "./User.js";
 import { Stakeholder } from "./Stakeholder.js";
+import { Pilot } from "./Pilot.js";
 import { Sipoc } from "./Sipoc.js";
 import { SipocPhase } from "./SipocPhase.js";
 import { SipocRow } from "./SipocRow.js";
@@ -27,6 +28,21 @@ Stakeholder.belongsToMany(Process, {
   otherKey: "processId",
 });
 
+// Process <-> Pilot (many-to-many)
+Process.belongsToMany(Pilot, {
+  through: "process_pilots",
+  as: "pilots",
+  foreignKey: "processId",
+  otherKey: "pilotId",
+});
+
+Pilot.belongsToMany(Process, {
+  through: "process_pilots",
+  as: "processes",
+  foreignKey: "pilotId",
+  otherKey: "processId",
+});
+
 // Process <-> Sipoc (one-to-one)
 Process.hasOne(Sipoc, { as: "sipoc", foreignKey: "processId" });
 Sipoc.belongsTo(Process, { as: "process", foreignKey: "processId" });
@@ -40,4 +56,4 @@ SipocPhase.hasMany(SipocRow, { as: "rows", foreignKey: "sipocPhaseId", onDelete:
 SipocRow.belongsTo(SipocPhase, { as: "sipocPhase", foreignKey: "sipocPhaseId" });
 
 // Exporting models is optional here; the imports above are enough to register them.
-export { Process, User, Stakeholder, Sipoc, SipocPhase, SipocRow };
+export { Process, User, Stakeholder, Pilot, Sipoc, SipocPhase, SipocRow };
