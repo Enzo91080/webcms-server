@@ -4,6 +4,7 @@ import {
   adminDeleteStakeholder,
   adminListStakeholders,
   adminPatchStakeholder,
+  adminSetStakeholderProcesses,
 } from "../controllers/stakeholder.controller.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -16,3 +17,4 @@ adminStakeholderRoutes.get("/", asyncHandler(adminListStakeholders));
 adminStakeholderRoutes.post("/", asyncHandler(adminCreateStakeholder));
 adminStakeholderRoutes.patch("/:id", asyncHandler(adminPatchStakeholder));
 adminStakeholderRoutes.delete("/:id", asyncHandler(adminDeleteStakeholder));
+adminStakeholderRoutes.put("/:id/processes", asyncHandler(adminSetStakeholderProcesses));

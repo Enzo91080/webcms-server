@@ -1,4 +1,5 @@
 import { Stakeholder } from "../models/Stakeholder.js";
+import { Process } from "../models/Process.js";
 
 function validateUuid(id) {
   if (!id || typeof id !== "string") {
@@ -17,8 +18,24 @@ export async function adminListStakeholders(req, res) {
   const items = await Stakeholder.findAll({
     order: [["name", "ASC"]],
     attributes: ["id", "name", "isActive", "createdAt", "updatedAt"],
+    include: [
+      {
+        model: Process,
+        as: "processes",
+        attributes: ["id"],
+        through: { attributes: [] },
+      },
+    ],
   });
-  res.json({ data: items.map(toJSON) });
+
+  const data = items.map((item) => {
+    const json = toJSON(item);
+    json.processIds = (json.processes || []).map((p) => p.id);
+    delete json.processes;
+    return json;
+  });
+
+  res.json({ data });
 }
 
 export async function adminCreateStakeholder(req, res) {
@@ -63,4 +80,38 @@ export async function adminDeleteStakeholder(req, res) {
   const deleted = await Stakeholder.destroy({ where: { id } });
   if (!deleted) return res.status(404).json({ error: "Not Found" });
   res.json({ data: { ok: true } });
+}
+
+export async function adminSetStakeholderProcesses(req, res) {
+  const id = validateUuid(req.params.id);
+
+  const processIds = req.body?.processIds;
+  if (!Array.isArray(processIds)) {
+    return res.status(400).json({ error: "processIds must be an array" });
+  }
+
+  const stakeholder = await Stakeholder.findByPk(id);
+  if (!stakeholder) {
+    return res.status(404).json({ error: "Stakeholder not found" });
+  }
+
+  // Validate that all processIds exist
+  if (processIds.length > 0) {
+    const existingProcesses = await Process.findAll({
+      where: { id: processIds },
+      attributes: ["id"],
+    });
+    const existingIds = new Set(existingProcesses.map((p) => p.id));
+    const invalidIds = processIds.filter((pid) => !existingIds.has(pid));
+    if (invalidIds.length > 0) {
+      return res
+        .status(400)
+        .json({ error: `Invalid process IDs: ${invalidIds.join(", ")}` });
+    }
+  }
+
+  // Replace associations
+  await stakeholder.setProcesses(processIds);
+
+  res.json({ data: { ok: true, processIds } });
 }
