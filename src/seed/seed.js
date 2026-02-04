@@ -114,7 +114,6 @@ async function createSipocForProcess(processId, phasesData) {
         processusClient: rowData.processusClient || null,
         designationProcessusVendre: rowData.designationProcessusVendre || rowData.designation || null,
         activitePhase: rowData.activitePhase || rowData.designation || null,
-        sortiesProcessusVendre: rowData.sortiesProcessusVendre || rowData.sorties || null,
         designationProcessusClient: rowData.designationProcessusClient || rowData.processusClient || null,
         sortiesProcessusClient: rowData.sortiesProcessusClient || null,
       });

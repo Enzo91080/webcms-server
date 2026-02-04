@@ -42,6 +42,27 @@ export const SipocRow = sequelize.define(
       type: DataTypes.TEXT,
       allowNull: true,
     },
+    // RACI columns (replacing single ressources field in admin UI)
+    raciR: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "raci_r",
+    },
+    raciA: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "raci_a",
+    },
+    raciC: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "raci_c",
+    },
+    raciI: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: "raci_i",
+    },
     sorties: {
       type: DataTypes.TEXT,
       allowNull: true,

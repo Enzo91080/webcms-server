@@ -46,9 +46,7 @@ function sipocRowToDto(row) {
     designation: row.designation ?? undefined,
     sorties: row.sorties ?? undefined,
     processusClient: row.processusClient ?? undefined,
-    designationProcessusVendre: row.designationProcessusVendre ?? undefined,
     activitePhase: row.activitePhase ?? undefined,
-    sortiesProcessusVendre: row.sortiesProcessusVendre ?? undefined,
     designationProcessusClient: row.designationProcessusClient ?? undefined,
     sortiesProcessusClient: row.sortiesProcessusClient ?? undefined,
   };
@@ -587,7 +585,6 @@ export async function replaceSipoc(req, res) {
         processusClient: rowDto.processusClient ?? null,
         designationProcessusVendre: rowDto.designationProcessusVendre ?? null,
         activitePhase: rowDto.activitePhase ?? null,
-        sortiesProcessusVendre: rowDto.sortiesProcessusVendre ?? null,
         designationProcessusClient: rowDto.designationProcessusClient ?? null,
         sortiesProcessusClient: rowDto.sortiesProcessusClient ?? null,
       });

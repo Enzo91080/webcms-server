@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "seed": "node src/seed/seed.js"
+    "seed": "node src/seed/seed.js",
+    "migrate:raci": "node src/migrations/20240204-add-raci-columns.js",
+    "migrate:raci:down": "node src/migrations/20240204-add-raci-columns.js down"
   },
   "dependencies": {
     "cors": "^2.8.5",
