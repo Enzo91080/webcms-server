@@ -8,33 +8,122 @@ import { SipocPhase } from "../models/SipocPhase.js";
 import { SipocRow } from "../models/SipocRow.js";
 
 // ============================================================================
-// HELPERS - Validation & Transformation
+// CONSTANTS
 // ============================================================================
 
-/**
- * Validates and returns a UUID string.
- * Throws 400 error if invalid.
- */
+const LINK_FIELDS = [
+  "needs",
+  "expectations",
+  "evaluationCriteria",
+  "requirements",
+  "strengths",
+  "weaknesses",
+  "opportunities",
+  "risks",
+  "actionPlan",
+];
+
+// ============================================================================
+// SMALL UTILS
+// ============================================================================
+
+function httpError(statusCode, message) {
+  const err = new Error(message);
+  err.statusCode = statusCode;
+  return err;
+}
+
 function validateUuid(id) {
-  if (!id || typeof id !== "string") {
-    const err = new Error("Invalid id");
-    err.statusCode = 400;
-    throw err;
-  }
+  if (!id || typeof id !== "string") throw httpError(400, "Invalid id");
   return id;
 }
 
-/**
- * Converts a Sequelize model instance to plain JSON.
- * Gracefully handles models and already-converted objects.
- */
 function toJSON(model) {
   return model?.toJSON ? model.toJSON() : model;
 }
 
-/**
- * Converts a SipocRow model to DTO format
- */
+function pickLink(linkData) {
+  const out = {};
+  for (const f of LINK_FIELDS) out[f] = linkData?.[f] ?? null;
+  return out;
+}
+
+function normalizeText(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+function ensureArray(value, errorMsg) {
+  if (!Array.isArray(value)) throw httpError(400, errorMsg);
+  return value;
+}
+
+async function findProcessOr404(id, opts = {}) {
+  const doc = await Process.findByPk(id, opts);
+  if (!doc) throw httpError(404, "Not Found");
+  return doc;
+}
+
+async function ensureAllExist(Model, ids, label) {
+  const uniq = [...new Set(ids.filter(Boolean))];
+  if (uniq.length === 0) return;
+
+  const rows = await Model.findAll({ where: { id: uniq }, attributes: ["id"] });
+  const ok = new Set(rows.map((r) => r.id));
+  const invalid = uniq.filter((x) => !ok.has(x));
+  if (invalid.length) throw httpError(400, `Invalid ${label} IDs: ${invalid.join(", ")}`);
+}
+
+// ============================================================================
+// INCLUDES / TRANSFORMS
+// ============================================================================
+
+function processBaseIncludes() {
+  return [
+    {
+      model: Stakeholder,
+      as: "stakeholders",
+      through: { attributes: LINK_FIELDS },
+      attributes: ["id", "name", "isActive"],
+    },
+    {
+      model: Pilot,
+      as: "pilots",
+      through: { attributes: [] },
+      attributes: ["id", "name", "isActive"],
+    },
+  ];
+}
+
+function transformProcess(process, sipocData = null) {
+  const json = toJSON(process);
+
+  if (Array.isArray(json.stakeholders)) {
+    json.stakeholderIds = json.stakeholders.map((s) => s.id).filter(Boolean);
+    json.stakeholders = json.stakeholders.map((s) => ({
+      id: s.id,
+      name: s.name,
+      isActive: s.isActive,
+      link: pickLink(s.ProcessStakeholder),
+    }));
+  }
+
+  if (Array.isArray(json.pilots)) {
+    json.pilotIds = json.pilots.map((p) => p.id).filter(Boolean);
+    // on conserve `pilots` tel quel pour affichage (id, name, isActive)
+  }
+
+  if (Array.isArray(json.children)) json.children = json.children.map(toJSON);
+  if (sipocData) json.sipoc = sipocData;
+
+  return json;
+}
+
+// ============================================================================
+// SIPOC (normalized tables) -> DTO
+// ============================================================================
+
 function sipocRowToDto(row) {
   return {
     ref: row.ref ?? undefined,
@@ -56,9 +145,6 @@ function sipocRowToDto(row) {
   };
 }
 
-/**
- * Converts a SipocPhase model (with rows) to DTO format
- */
 function sipocPhaseToDto(phase) {
   return {
     key: phase.key ?? undefined,
@@ -67,10 +153,6 @@ function sipocPhaseToDto(phase) {
   };
 }
 
-/**
- * Fetches SIPOC data for a process from normalized tables
- * Returns { phases: [], rows: [] } format for compatibility
- */
 async function fetchSipocForProcess(processId) {
   const sipoc = await Sipoc.findOne({
     where: { processId },
@@ -78,12 +160,7 @@ async function fetchSipocForProcess(processId) {
       {
         model: SipocPhase,
         as: "phases",
-        include: [
-          {
-            model: SipocRow,
-            as: "rows",
-          },
-        ],
+        include: [{ model: SipocRow, as: "rows" }],
       },
     ],
     order: [
@@ -92,88 +169,10 @@ async function fetchSipocForProcess(processId) {
     ],
   });
 
-  if (!sipoc) {
-    return { phases: [], rows: [] };
-  }
+  if (!sipoc) return { phases: [], rows: [] };
 
   const phases = (sipoc.phases || []).map(sipocPhaseToDto);
-  const rows = phases.flatMap((p) => p.rows || []);
-
-  return { phases, rows };
-}
-
-// Champs de la table de jointure ProcessStakeholder
-const LINK_FIELDS = [
-  "needs",
-  "expectations",
-  "evaluationCriteria",
-  "requirements",
-  "strengths",
-  "weaknesses",
-  "opportunities",
-  "risks",
-  "actionPlan",
-];
-
-/**
- * Transforms a process and its children into JSON format.
- * Recursively converts each child to JSON.
- */
-function transformProcessWithChildren(process, sipocData = null) {
-  const json = toJSON(process);
-
-  // Convert associated stakeholders with link fields
-  // Format: stakeholders: [{ id, name, isActive, link: { needs, expectations, ... } }]
-  if (Array.isArray(json.stakeholders)) {
-    json.stakeholderIds = json.stakeholders.map((s) => s.id).filter(Boolean);
-    json.stakeholders = json.stakeholders.map((s) => {
-      const linkData = s.ProcessStakeholder || {};
-      const link = {};
-      for (const field of LINK_FIELDS) {
-        link[field] = linkData[field] ?? null;
-      }
-      return {
-        id: s.id,
-        name: s.name,
-        isActive: s.isActive,
-        link,
-      };
-    });
-  }
-
-  // Convert associated pilots to pilotIds + keep pilots array for display
-  if (Array.isArray(json.pilots)) {
-    json.pilotIds = json.pilots.map((p) => p.id).filter(Boolean);
-    // Keep pilots array with full objects for display (id, name, isActive)
-  }
-
-  if (Array.isArray(json.children)) {
-    json.children = json.children.map(toJSON);
-  }
-
-  // Add SIPOC data if provided
-  if (sipocData) {
-    json.sipoc = sipocData;
-  }
-
-  return json;
-}
-
-function processBaseIncludes() {
-  return [
-    {
-      model: Stakeholder,
-      as: "stakeholders",
-      through: { attributes: LINK_FIELDS },
-      attributes: ["id", "name", "isActive"],
-    },
-    {
-      model: Pilot,
-      as: "pilots",
-      through: { attributes: [] },
-      attributes: ["id", "name", "isActive"],
-    },
-  ];
+  return { phases, rows: phases.flatMap((p) => p.rows || []) };
 }
 
 // ============================================================================
@@ -186,101 +185,67 @@ export async function getCartography(req, res) {
     order: [["orderInParent", "ASC"]],
     attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
   });
+
   res.json({ data: roots.map(toJSON) });
 }
 
 export async function listAll(req, res) {
   const items = await Process.findAll({
+    include: processBaseIncludes(),
     order: [["parentProcessId", "ASC"], ["orderInParent", "ASC"], ["code", "ASC"]],
     attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "updatedAt", "createdAt"],
   });
+
   res.json({ data: items.map(toJSON) });
 }
 
-/**
- * Retrieves a process by code, including its direct children and SIPOC.
- */
+async function getProcessWithChildren(where) {
+  const process = await Process.findOne({
+    where,
+    include: [
+      ...processBaseIncludes(),
+      {
+        model: Process,
+        as: "children",
+        attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
+        order: [["orderInParent", "ASC"]],
+      },
+    ],
+  });
+
+  if (!process) throw httpError(404, "Not Found");
+  const sipocData = await fetchSipocForProcess(process.id);
+  return transformProcess(process, sipocData);
+}
+
 export async function getByCode(req, res) {
   const { code } = req.params;
-
-  const process = await Process.findOne({
-    where: { code },
-    include: [
-      ...processBaseIncludes(),
-      {
-        model: Process,
-        as: "children",
-        attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
-        order: [["orderInParent", "ASC"]],
-      },
-    ],
-  });
-
-  if (!process) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
-  // Fetch SIPOC data from normalized tables
-  const sipocData = await fetchSipocForProcess(process.id);
-
-  res.json({ data: transformProcessWithChildren(process, sipocData) });
+  const data = await getProcessWithChildren({ code });
+  res.json({ data });
 }
 
-/**
- * Retrieves a process by ID, including its direct children and SIPOC.
- */
 export async function getById(req, res) {
   const id = validateUuid(req.params.id);
-
-  const process = await Process.findByPk(id, {
-    include: [
-      ...processBaseIncludes(),
-      {
-        model: Process,
-        as: "children",
-        attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
-        order: [["orderInParent", "ASC"]],
-      },
-    ],
-  });
-
-  if (!process) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
-  // Fetch SIPOC data from normalized tables
-  const sipocData = await fetchSipocForProcess(process.id);
-
-  res.json({ data: transformProcessWithChildren(process, sipocData) });
+  const data = await getProcessWithChildren({ id });
+  res.json({ data });
 }
 
-/**
- * Retrieves the full hierarchy (descendants) of a process.
- * Uses recursive descent to build the tree.
- */
+// ============================================================================
+// PUBLIC API - Hierarchy / Path
+// ============================================================================
+
 export async function getHierarchy(req, res) {
   const id = validateUuid(req.params.id);
-
   const result = await buildHierarchy(id);
-
-  if (!result) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
+  if (!result) return res.status(404).json({ error: "Not Found" });
   res.json({ data: result });
 }
 
-/**
- * Recursively builds the hierarchy for a process and all its descendants.
- */
 async function buildHierarchy(processId) {
   const process = await Process.findByPk(processId, {
     attributes: ["id", "code", "name", "title", "parentProcessId", "orderInParent"],
   });
-
-  if (!process) {
-    return null;
-  }
+  if (!process) return null;
 
   const children = await Process.findAll({
     where: { parentProcessId: processId },
@@ -288,45 +253,24 @@ async function buildHierarchy(processId) {
     order: [["orderInParent", "ASC"]],
   });
 
-  const descendants = await Promise.all(
-    children.map((child) => buildHierarchy(child.id))
-  );
+  const descendants = await Promise.all(children.map((child) => buildHierarchy(child.id)));
 
-  return {
-    ...toJSON(process),
-    descendants: descendants.filter(Boolean),
-  };
+  return { ...toJSON(process), descendants: descendants.filter(Boolean) };
 }
 
-/**
- * Retrieves the breadcrumb path from a process up to the root.
- * Returns path in order from root to process.
- */
 export async function getPath(req, res) {
   const id = validateUuid(req.params.id);
-
   const path = await buildPath(id);
-
-  if (path === null) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
-  path.reverse(); // Reverse to get root-to-process order
+  if (path === null) return res.status(404).json({ error: "Not Found" });
+  path.reverse();
   res.json({ data: path });
 }
 
-/**
- * Recursively builds the path from a process to the root.
- * Returns null if process not found.
- */
 async function buildPath(processId) {
   const current = await Process.findByPk(processId, {
     attributes: ["id", "code", "name", "parentProcessId", "orderInParent"],
   });
-
-  if (!current) {
-    return null;
-  }
+  if (!current) return null;
 
   const pathItem = {
     id: current.id,
@@ -336,12 +280,8 @@ async function buildPath(processId) {
     orderInParent: current.orderInParent,
   };
 
-  // Stop at root
-  if (!current.parentProcessId) {
-    return [pathItem];
-  }
+  if (!current.parentProcessId) return [pathItem];
 
-  // Recurse to parent
   const parentPath = await buildPath(current.parentProcessId);
   return parentPath ? [...parentPath, pathItem] : null;
 }
@@ -352,72 +292,43 @@ async function buildPath(processId) {
 
 export async function getSipocRows(req, res) {
   const id = validateUuid(req.params.id);
+  await findProcessOr404(id, { attributes: ["id"] });
 
-  const process = await Process.findByPk(id, { attributes: ["id"] });
-
-  if (!process) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
-  // Fetch SIPOC from normalized tables
   const sipocData = await fetchSipocForProcess(id);
-
   res.json({ data: sipocData.rows });
 }
 
 export async function getLogigramme(req, res) {
   const id = validateUuid(req.params.id);
 
-  const process = await Process.findByPk(id, {
+  const process = await findProcessOr404(id, {
     attributes: ["id", "code", "name", "logigramme"],
   });
 
-  if (!process) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
-  res.json({
-    data: {
-      code: process.code,
-      name: process.name,
-      logigramme: process.logigramme,
-    },
-  });
+  res.json({ data: { code: process.code, name: process.name, logigramme: process.logigramme } });
 }
 
 // ============================================================================
 // PUBLIC API - Resolution & Lookup
 // ============================================================================
 
-/**
- * Given an array of process IDs, returns a map of id -> { code, name }.
- * Missing IDs are not included in the result.
- */
 export async function resolveCodes(req, res) {
   const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
-
-  if (ids.length === 0) {
-    return res.json({ data: {} });
-  }
+  if (ids.length === 0) return res.json({ data: {} });
 
   const docs = await Process.findAll({
     where: { id: { [Op.in]: ids } },
     attributes: ["id", "code", "name"],
   });
 
-  const map = {};
-  for (const doc of docs) {
-    const json = toJSON(doc);
-    map[json.id] = { code: json.code, name: json.name };
-  }
+  const map = Object.fromEntries(docs.map((d) => {
+    const j = toJSON(d);
+    return [j.id, { code: j.code, name: j.name }];
+  }));
 
   res.json({ data: map });
 }
 
-/**
- * Resolves a process ID by its code.
- * Returns { id, code, name } or 404 if not found.
- */
 export async function resolveIdByCode(req, res) {
   const { code } = req.params;
 
@@ -426,73 +337,19 @@ export async function resolveIdByCode(req, res) {
     attributes: ["id", "code", "name"],
   });
 
-  if (!process) {
-    return res.status(404).json({ error: "Not Found" });
-  }
+  if (!process) return res.status(404).json({ error: "Not Found" });
 
   const json = toJSON(process);
   res.json({ data: { id: json.id, code: json.code, name: json.name } });
 }
 
 // ============================================================================
-// PUBLIC API - CRUD Operations
+// PUBLIC API - CRUD
 // ============================================================================
 
-export async function createProcess(req, res) {
-  const { body, stakeholders } = normalizePatchBody(req.body);
-
-  const created = await Process.create(body);
-
-  if (stakeholders !== undefined) {
-    await applyStakeholders(created, stakeholders);
-  }
-
-  const reloaded = await Process.findByPk(created.id, {
-    include: processBaseIncludes(),
-  });
-
-  res.status(201).json({ data: transformProcessWithChildren(reloaded) });
-}
-
-/**
- * Patches a process by ID. Updates only provided fields.
- * Handles legacy _id field (converts to id).
- * Treats empty string parentProcessId as null (root process).
- */
-export async function patchProcess(req, res) {
-  const id = validateUuid(req.params.id);
-  const { body, stakeholders } = normalizePatchBody(req.body);
-
-  const [updated] = await Process.update(body, { where: { id } });
-
-  if (!updated) {
-    return res.status(404).json({ error: "Not Found" });
-  }
-
-  const process = await Process.findByPk(id);
-  if (!process) return res.status(404).json({ error: "Not Found" });
-
-  if (stakeholders !== undefined) {
-    await applyStakeholders(process, stakeholders);
-  }
-
-  const reloaded = await Process.findByPk(id, {
-    include: processBaseIncludes(),
-  });
-
-  res.json({ data: transformProcessWithChildren(reloaded) });
-}
-
-/**
- * Normalizes a PATCH body:
- * - Converts legacy _id to id
- * - Converts empty parentProcessId to null
- */
 function normalizePatchBody(body) {
   const normalized = { ...(body || {}) };
 
-  // Stakeholders are now managed via a reference table.
-  // We accept legacy payloads (array of stakeholder names) for compatibility.
   const stakeholders = Object.prototype.hasOwnProperty.call(normalized, "stakeholders")
     ? normalized.stakeholders
     : undefined;
@@ -503,9 +360,7 @@ function normalizePatchBody(body) {
     delete normalized._id;
   }
 
-  if (normalized.parentProcessId === "") {
-    normalized.parentProcessId = null;
-  }
+  if (normalized.parentProcessId === "") normalized.parentProcessId = null;
 
   return { body: normalized, stakeholders };
 }
@@ -514,54 +369,64 @@ async function applyStakeholders(process, input) {
   const arr = Array.isArray(input) ? input : [];
   const names = [...new Set(arr.map((x) => String(x || "").trim()).filter(Boolean))];
 
-  const instances = [];
-  for (const name of names) {
+  const instances = await Promise.all(names.map(async (name) => {
     const [s] = await Stakeholder.findOrCreate({
       where: { name },
       defaults: { name, isActive: true },
     });
-    instances.push(s);
-  }
+    return s;
+  }));
 
-  // If empty array provided, this clears the relationship.
   await process.setStakeholders(instances);
+}
+
+export async function createProcess(req, res) {
+  const { body, stakeholders } = normalizePatchBody(req.body);
+
+  const created = await Process.create(body);
+  if (stakeholders !== undefined) await applyStakeholders(created, stakeholders);
+
+  const reloaded = await Process.findByPk(created.id, { include: processBaseIncludes() });
+  res.status(201).json({ data: transformProcess(reloaded) });
+}
+
+export async function patchProcess(req, res) {
+  const id = validateUuid(req.params.id);
+  const { body, stakeholders } = normalizePatchBody(req.body);
+
+  const [updated] = await Process.update(body, { where: { id } });
+  if (!updated) return res.status(404).json({ error: "Not Found" });
+
+  const process = await Process.findByPk(id);
+  if (!process) return res.status(404).json({ error: "Not Found" });
+
+  if (stakeholders !== undefined) await applyStakeholders(process, stakeholders);
+
+  const reloaded = await Process.findByPk(id, { include: processBaseIncludes() });
+  res.json({ data: transformProcess(reloaded) });
 }
 
 // ============================================================================
 // PUBLIC API - SIPOC & Logigramme Updates
 // ============================================================================
 
-/**
- * Replaces the SIPOC data for a process using normalized tables.
- */
 export async function replaceSipoc(req, res) {
   const id = validateUuid(req.params.id);
   const { sipoc } = req.body;
 
-  const process = await Process.findByPk(id, { attributes: ["id"] });
-  if (!process) {
-    return res.status(404).json({ error: "Not Found" });
-  }
+  await findProcessOr404(id, { attributes: ["id"] });
 
-  // Parse input - accept both { phases: [] } and { rows: [] } formats
   let phasesInput = [];
-  if (sipoc?.phases && Array.isArray(sipoc.phases)) {
-    phasesInput = sipoc.phases;
-  } else if (sipoc?.rows && Array.isArray(sipoc.rows)) {
-    // Convert flat rows to single phase
-    phasesInput = [{ key: "default", name: "Phase unique", rows: sipoc.rows }];
-  }
+  if (Array.isArray(sipoc?.phases)) phasesInput = sipoc.phases;
+  else if (Array.isArray(sipoc?.rows)) phasesInput = [{ key: "default", name: "Phase unique", rows: sipoc.rows }];
 
-  // Find or create Sipoc
   const [sipocRecord] = await Sipoc.findOrCreate({
     where: { processId: id },
     defaults: { processId: id },
   });
 
-  // Delete existing phases (cascade will delete rows)
   await SipocPhase.destroy({ where: { sipocId: sipocRecord.id } });
 
-  // Create new phases and rows
   for (let phaseIndex = 0; phaseIndex < phasesInput.length; phaseIndex++) {
     const phaseDto = phasesInput[phaseIndex];
 
@@ -599,23 +464,16 @@ export async function replaceSipoc(req, res) {
     }
   }
 
-  // Reload and return
   const sipocData = await fetchSipocForProcess(id);
   res.json({ data: { id, sipoc: sipocData } });
 }
 
-/**
- * Replaces the logigramme data for a process.
- */
 export async function replaceLogigramme(req, res) {
   const id = validateUuid(req.params.id);
   const { logigramme } = req.body;
 
   const [updated] = await Process.update({ logigramme }, { where: { id } });
-
-  if (!updated) {
-    return res.status(404).json({ error: "Not Found" });
-  }
+  if (!updated) return res.status(404).json({ error: "Not Found" });
 
   const process = await Process.findByPk(id);
   res.json({ data: toJSON(process) });
@@ -629,10 +487,7 @@ export async function deleteProcess(req, res) {
   const id = validateUuid(req.params.id);
 
   const deleted = await Process.destroy({ where: { id } });
-
-  if (!deleted) {
-    return res.status(404).json({ error: "Not Found" });
-  }
+  if (!deleted) return res.status(404).json({ error: "Not Found" });
 
   res.json({ data: { ok: true } });
 }
@@ -641,42 +496,14 @@ export async function deleteProcess(req, res) {
 // ADMIN API - Process Pilots Management
 // ============================================================================
 
-/**
- * Sets the pilots for a process (many-to-many).
- * PUT /api/admin/processes/:id/pilots
- * Body: { pilotIds: string[] }
- */
 export async function adminSetProcessPilots(req, res) {
   const id = validateUuid(req.params.id);
+  const pilotIds = ensureArray(req.body?.pilotIds, "pilotIds must be an array");
 
-  const pilotIds = req.body?.pilotIds;
-  if (!Array.isArray(pilotIds)) {
-    return res.status(400).json({ error: "pilotIds must be an array" });
-  }
+  const process = await findProcessOr404(id);
+  await ensureAllExist(Pilot, pilotIds, "pilot");
 
-  const process = await Process.findByPk(id);
-  if (!process) {
-    return res.status(404).json({ error: "Process not found" });
-  }
-
-  // Validate that all pilotIds exist
-  if (pilotIds.length > 0) {
-    const existingPilots = await Pilot.findAll({
-      where: { id: pilotIds },
-      attributes: ["id"],
-    });
-    const existingIds = new Set(existingPilots.map((p) => p.id));
-    const invalidIds = pilotIds.filter((pid) => !existingIds.has(pid));
-    if (invalidIds.length > 0) {
-      return res
-        .status(400)
-        .json({ error: `Invalid pilot IDs: ${invalidIds.join(", ")}` });
-    }
-  }
-
-  // Replace associations
   await process.setPilots(pilotIds);
-
   res.json({ data: { ok: true, pilotIds } });
 }
 
@@ -684,59 +511,20 @@ export async function adminSetProcessPilots(req, res) {
 // ADMIN API - Process Stakeholders Management (with link fields)
 // ============================================================================
 
-function normalizeText(v) {
-  if (v === null || v === undefined) return null;
-  const s = String(v).trim();
-  return s.length ? s : null;
-}
-
-/**
- * Sets the stakeholders for a process with enriched link fields.
- * PUT /api/admin/processes/:id/stakeholders
- * Body: { items: [{ stakeholderId, needs, expectations, ... }] }
- *
- * Behavior: "replace" - deletes missing links, upserts present ones.
- */
 export async function adminSetProcessStakeholders(req, res) {
   const id = validateUuid(req.params.id);
+  const items = ensureArray(req.body?.items, "items must be an array");
 
-  const items = req.body?.items;
-  if (!Array.isArray(items)) {
-    return res.status(400).json({ error: "items must be an array" });
-  }
+  await findProcessOr404(id);
 
-  const process = await Process.findByPk(id);
-  if (!process) {
-    return res.status(404).json({ error: "Process not found" });
-  }
+  const stakeholderIds = items.map((x) => x?.stakeholderId).filter(Boolean);
+  await ensureAllExist(Stakeholder, stakeholderIds, "stakeholder");
 
-  // Validate all stakeholderIds exist
-  const stakeholderIds = items.map((item) => item.stakeholderId).filter(Boolean);
-  const uniqueIds = [...new Set(stakeholderIds)];
-
-  if (uniqueIds.length > 0) {
-    const existingStakeholders = await Stakeholder.findAll({
-      where: { id: uniqueIds },
-      attributes: ["id"],
-    });
-    const existingIds = new Set(existingStakeholders.map((s) => s.id));
-    const invalidIds = uniqueIds.filter((sid) => !existingIds.has(sid));
-    if (invalidIds.length > 0) {
-      return res
-        .status(400)
-        .json({ error: `Invalid stakeholder IDs: ${invalidIds.join(", ")}` });
-    }
-  }
-
-  // Delete all existing links for this process
   await ProcessStakeholder.destroy({ where: { processId: id } });
 
-  // Create new links with enriched fields
-  const createdLinks = [];
-  for (const item of items) {
-    if (!item.stakeholderId) continue;
-
-    const linkData = {
+  const rows = items
+    .filter((x) => x?.stakeholderId)
+    .map((item) => ({
       processId: id,
       stakeholderId: item.stakeholderId,
       needs: normalizeText(item.needs),
@@ -748,11 +536,9 @@ export async function adminSetProcessStakeholders(req, res) {
       opportunities: normalizeText(item.opportunities),
       risks: normalizeText(item.risks),
       actionPlan: normalizeText(item.actionPlan),
-    };
+    }));
 
-    const created = await ProcessStakeholder.create(linkData);
-    createdLinks.push(created);
-  }
+  if (rows.length) await ProcessStakeholder.bulkCreate(rows);
 
-  res.json({ data: { ok: true, count: createdLinks.length } });
+  res.json({ data: { ok: true, count: rows.length } });
 }
