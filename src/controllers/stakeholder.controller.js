@@ -14,29 +14,53 @@ function toJSON(model) {
   return model?.toJSON ? model.toJSON() : model;
 }
 
-export async function adminListStakeholders(req, res) {
-  const items = await Stakeholder.findAll({
-    order: [["name", "ASC"]],
-    attributes: ["id", "name", "isActive", "createdAt", "updatedAt"],
-    include: [
-      {
-        model: Process,
-        as: "processes",
-        attributes: ["id"],
-        through: { attributes: [] },
-      },
-    ],
-  });
-
-  const data = items.map((item) => {
-    const json = toJSON(item);
-    json.processIds = (json.processes || []).map((p) => p.id);
-    delete json.processes;
-    return json;
-  });
-
-  res.json({ data });
+function normalizeText(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
 }
+
+const STAKEHOLDER_ATTRS = [
+  "id",
+  "name",
+  "isActive",
+  "needs",
+  "expectations",
+  "evaluationCriteria",
+  "requirements",
+  "strengths",
+  "weaknesses",
+  "opportunities",
+  "risks",
+  "actionPlan",
+  "createdAt",
+  "updatedAt",
+];
+
+export async function adminListStakeholders(req, res) {
+  try {
+    const items = await Stakeholder.findAll({
+      order: [["name", "ASC"]],
+      attributes: STAKEHOLDER_ATTRS,
+      include: [
+        { model: Process, as: "processes", attributes: ["id"], through: { attributes: [] } },
+      ],
+    });
+
+    const data = items.map((item) => {
+      const json = toJSON(item);
+      json.processIds = (json.processes || []).map((p) => p.id);
+      delete json.processes;
+      return json;
+    });
+
+    res.json({ data });
+  } catch (e) {
+    console.error("adminListStakeholders error:", e);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+}
+
 
 export async function adminCreateStakeholder(req, res) {
   const name = String(req.body?.name || "").trim();
@@ -44,12 +68,32 @@ export async function adminCreateStakeholder(req, res) {
     return res.status(400).json({ error: "name is required" });
   }
 
-  const [item] = await Stakeholder.findOrCreate({
+  // Optional fields
+  const defaults = {
+    name,
+    isActive: typeof req.body?.isActive === "boolean" ? req.body.isActive : true,
+
+    needs: normalizeText(req.body?.needs),
+    expectations: normalizeText(req.body?.expectations),
+    evaluationCriteria: normalizeText(req.body?.evaluationCriteria),
+    requirements: normalizeText(req.body?.requirements),
+    strengths: normalizeText(req.body?.strengths),
+    weaknesses: normalizeText(req.body?.weaknesses),
+    opportunities: normalizeText(req.body?.opportunities),
+    risks: normalizeText(req.body?.risks),
+    actionPlan: normalizeText(req.body?.actionPlan),
+  };
+
+  const [item, created] = await Stakeholder.findOrCreate({
     where: { name },
-    defaults: { name, isActive: true },
+    defaults,
   });
 
-  res.status(201).json({ data: toJSON(item) });
+  // If it already exists, we keep behavior minimal: return existing record (no overwrite).
+  // If you WANT to update existing when findOrCreate hits, do it explicitly here.
+
+  const fresh = await Stakeholder.findByPk(item.id, { attributes: STAKEHOLDER_ATTRS });
+  res.status(created ? 201 : 200).json({ data: toJSON(fresh) });
 }
 
 export async function adminPatchStakeholder(req, res) {
@@ -66,12 +110,34 @@ export async function adminPatchStakeholder(req, res) {
     patch.isActive = req.body.isActive;
   }
 
+  // New text fields (accept string OR null to clear)
+  const textFields = [
+    "needs",
+    "expectations",
+    "evaluationCriteria",
+    "requirements",
+    "strengths",
+    "weaknesses",
+    "opportunities",
+    "risks",
+    "actionPlan",
+  ];
+
+  for (const key of textFields) {
+    if (req.body && Object.prototype.hasOwnProperty.call(req.body, key)) {
+      const v = req.body[key];
+      if (v === null) patch[key] = null;
+      else if (typeof v === "string") patch[key] = normalizeText(v);
+      else {
+        return res.status(400).json({ error: `${key} must be a string or null` });
+      }
+    }
+  }
+
   const [updated] = await Stakeholder.update(patch, { where: { id } });
   if (!updated) return res.status(404).json({ error: "Not Found" });
 
-  const item = await Stakeholder.findByPk(id, {
-    attributes: ["id", "name", "isActive", "createdAt", "updatedAt"],
-  });
+  const item = await Stakeholder.findByPk(id, { attributes: STAKEHOLDER_ATTRS });
   res.json({ data: toJSON(item) });
 }
 
@@ -110,7 +176,6 @@ export async function adminSetStakeholderProcesses(req, res) {
     }
   }
 
-  // Replace associations
   await stakeholder.setProcesses(processIds);
 
   res.json({ data: { ok: true, processIds } });

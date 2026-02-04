@@ -11,6 +11,7 @@ export const Stakeholder = sequelize.define(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
+
     name: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -20,14 +21,61 @@ export const Stakeholder = sequelize.define(
         this.setDataValue("name", String(value || "").trim());
       },
     },
+
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
     },
+
+    // --- New fields (English) ---
+    needs: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    expectations: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    evaluationCriteria: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    requirements: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    strengths: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    weaknesses: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    opportunities: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    risks: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+
+    // Option A (recommended): structured action plan
+    actionPlan: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+
+    // Option B (if you prefer plain text instead of JSON):
+    // actionPlan: { type: DataTypes.TEXT, allowNull: true },
   },
   {
     tableName: "stakeholders",
     timestamps: true,
-    indexes: [{ unique: true, fields: ["name"] }, { fields: ["isActive"] }],
+    indexes: [
+      { unique: true, fields: ["name"] },
+      { fields: ["isActive"] },
+    ],
   }
 );
