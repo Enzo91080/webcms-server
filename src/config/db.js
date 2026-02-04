@@ -20,7 +20,9 @@ export async function connectDb() {
     await sequelize.authenticate();
     console.log(`[db] ✅ Connected to PostgreSQL`);
     if (env.nodeEnv === "development") {
-      await sequelize.sync({ alter: false });
+      // Note: alter: true va ajouter les nouvelles colonnes à process_stakeholders
+      // Remettre à false après le premier démarrage si vous ne voulez pas de sync auto
+      await sequelize.sync({ alter: true });
       console.log(`[db] ✅ Database synchronized`);
     }
   } catch (error) {

@@ -8,25 +8,33 @@ import { Pilot } from "./Pilot.js";
 import { Sipoc } from "./Sipoc.js";
 import { SipocPhase } from "./SipocPhase.js";
 import { SipocRow } from "./SipocRow.js";
+import { ProcessStakeholder } from "./ProcessStakeholder.js";
 
 // Self-referential hierarchy (already used by controllers)
 Process.hasMany(Process, { foreignKey: "parentProcessId", as: "children" });
 Process.belongsTo(Process, { foreignKey: "parentProcessId", as: "parent" });
 
-// Process <-> Stakeholder (many-to-many)
+// Process <-> Stakeholder (many-to-many via enriched join table)
 Process.belongsToMany(Stakeholder, {
-  through: "process_stakeholders",
+  through: ProcessStakeholder,
   as: "stakeholders",
   foreignKey: "processId",
   otherKey: "stakeholderId",
 });
 
 Stakeholder.belongsToMany(Process, {
-  through: "process_stakeholders",
+  through: ProcessStakeholder,
   as: "processes",
   foreignKey: "stakeholderId",
   otherKey: "processId",
 });
+
+// Direct access to join table (useful for querying link fields)
+Process.hasMany(ProcessStakeholder, { as: "stakeholderLinks", foreignKey: "processId" });
+ProcessStakeholder.belongsTo(Process, { as: "process", foreignKey: "processId" });
+
+Stakeholder.hasMany(ProcessStakeholder, { as: "processLinks", foreignKey: "stakeholderId" });
+ProcessStakeholder.belongsTo(Stakeholder, { as: "stakeholder", foreignKey: "stakeholderId" });
 
 // Process <-> Pilot (many-to-many)
 Process.belongsToMany(Pilot, {
@@ -56,4 +64,4 @@ SipocPhase.hasMany(SipocRow, { as: "rows", foreignKey: "sipocPhaseId", onDelete:
 SipocRow.belongsTo(SipocPhase, { as: "sipocPhase", foreignKey: "sipocPhaseId" });
 
 // Exporting models is optional here; the imports above are enough to register them.
-export { Process, User, Stakeholder, Pilot, Sipoc, SipocPhase, SipocRow };
+export { Process, User, Stakeholder, Pilot, Sipoc, SipocPhase, SipocRow, ProcessStakeholder };

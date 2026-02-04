@@ -1,6 +1,7 @@
 import { Op } from "sequelize";
 import { Process } from "../models/Process.js";
 import { Stakeholder } from "../models/Stakeholder.js";
+import { ProcessStakeholder } from "../models/ProcessStakeholder.js";
 import { Pilot } from "../models/Pilot.js";
 import { Sipoc } from "../models/Sipoc.js";
 import { SipocPhase } from "../models/SipocPhase.js";
@@ -99,6 +100,19 @@ async function fetchSipocForProcess(processId) {
   return { phases, rows };
 }
 
+// Champs de la table de jointure ProcessStakeholder
+const LINK_FIELDS = [
+  "needs",
+  "expectations",
+  "evaluationCriteria",
+  "requirements",
+  "strengths",
+  "weaknesses",
+  "opportunities",
+  "risks",
+  "actionPlan",
+];
+
 /**
  * Transforms a process and its children into JSON format.
  * Recursively converts each child to JSON.
@@ -106,10 +120,23 @@ async function fetchSipocForProcess(processId) {
 function transformProcessWithChildren(process, sipocData = null) {
   const json = toJSON(process);
 
-  // Convert associated stakeholders objects to an array of names (front compatibility)
+  // Convert associated stakeholders with link fields
+  // Format: stakeholders: [{ id, name, isActive, link: { needs, expectations, ... } }]
   if (Array.isArray(json.stakeholders)) {
     json.stakeholderIds = json.stakeholders.map((s) => s.id).filter(Boolean);
-    json.stakeholders = json.stakeholders.map((s) => s.name).filter(Boolean);
+    json.stakeholders = json.stakeholders.map((s) => {
+      const linkData = s.ProcessStakeholder || {};
+      const link = {};
+      for (const field of LINK_FIELDS) {
+        link[field] = linkData[field] ?? null;
+      }
+      return {
+        id: s.id,
+        name: s.name,
+        isActive: s.isActive,
+        link,
+      };
+    });
   }
 
   // Convert associated pilots to pilotIds + keep pilots array for display
@@ -135,8 +162,8 @@ function processBaseIncludes() {
     {
       model: Stakeholder,
       as: "stakeholders",
-      through: { attributes: [] },
-      attributes: ["id", "name"],
+      through: { attributes: LINK_FIELDS },
+      attributes: ["id", "name", "isActive"],
     },
     {
       model: Pilot,
@@ -646,4 +673,81 @@ export async function adminSetProcessPilots(req, res) {
   await process.setPilots(pilotIds);
 
   res.json({ data: { ok: true, pilotIds } });
+}
+
+// ============================================================================
+// ADMIN API - Process Stakeholders Management (with link fields)
+// ============================================================================
+
+function normalizeText(v) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+/**
+ * Sets the stakeholders for a process with enriched link fields.
+ * PUT /api/admin/processes/:id/stakeholders
+ * Body: { items: [{ stakeholderId, needs, expectations, ... }] }
+ *
+ * Behavior: "replace" - deletes missing links, upserts present ones.
+ */
+export async function adminSetProcessStakeholders(req, res) {
+  const id = validateUuid(req.params.id);
+
+  const items = req.body?.items;
+  if (!Array.isArray(items)) {
+    return res.status(400).json({ error: "items must be an array" });
+  }
+
+  const process = await Process.findByPk(id);
+  if (!process) {
+    return res.status(404).json({ error: "Process not found" });
+  }
+
+  // Validate all stakeholderIds exist
+  const stakeholderIds = items.map((item) => item.stakeholderId).filter(Boolean);
+  const uniqueIds = [...new Set(stakeholderIds)];
+
+  if (uniqueIds.length > 0) {
+    const existingStakeholders = await Stakeholder.findAll({
+      where: { id: uniqueIds },
+      attributes: ["id"],
+    });
+    const existingIds = new Set(existingStakeholders.map((s) => s.id));
+    const invalidIds = uniqueIds.filter((sid) => !existingIds.has(sid));
+    if (invalidIds.length > 0) {
+      return res
+        .status(400)
+        .json({ error: `Invalid stakeholder IDs: ${invalidIds.join(", ")}` });
+    }
+  }
+
+  // Delete all existing links for this process
+  await ProcessStakeholder.destroy({ where: { processId: id } });
+
+  // Create new links with enriched fields
+  const createdLinks = [];
+  for (const item of items) {
+    if (!item.stakeholderId) continue;
+
+    const linkData = {
+      processId: id,
+      stakeholderId: item.stakeholderId,
+      needs: normalizeText(item.needs),
+      expectations: normalizeText(item.expectations),
+      evaluationCriteria: normalizeText(item.evaluationCriteria),
+      requirements: normalizeText(item.requirements),
+      strengths: normalizeText(item.strengths),
+      weaknesses: normalizeText(item.weaknesses),
+      opportunities: normalizeText(item.opportunities),
+      risks: normalizeText(item.risks),
+      actionPlan: normalizeText(item.actionPlan),
+    };
+
+    const created = await ProcessStakeholder.create(linkData);
+    createdLinks.push(created);
+  }
+
+  res.json({ data: { ok: true, count: createdLinks.length } });
 }

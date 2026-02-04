@@ -1,5 +1,19 @@
 import { Stakeholder } from "../models/Stakeholder.js";
 import { Process } from "../models/Process.js";
+import { ProcessStakeholder } from "../models/ProcessStakeholder.js";
+
+// Champs de la table de jointure
+const LINK_FIELDS = [
+  "needs",
+  "expectations",
+  "evaluationCriteria",
+  "requirements",
+  "strengths",
+  "weaknesses",
+  "opportunities",
+  "risks",
+  "actionPlan",
+];
 
 function validateUuid(id) {
   if (!id || typeof id !== "string") {
@@ -20,19 +34,13 @@ function normalizeText(v) {
   return s.length ? s : null;
 }
 
+// Note: Les champs métier (needs, expectations, etc.) sont maintenant stockés
+// dans la table de jointure process_stakeholders, pas dans stakeholders.
+// Ils ne sont plus retournés ici.
 const STAKEHOLDER_ATTRS = [
   "id",
   "name",
   "isActive",
-  "needs",
-  "expectations",
-  "evaluationCriteria",
-  "requirements",
-  "strengths",
-  "weaknesses",
-  "opportunities",
-  "risks",
-  "actionPlan",
   "createdAt",
   "updatedAt",
 ];
@@ -43,14 +51,32 @@ export async function adminListStakeholders(req, res) {
       order: [["name", "ASC"]],
       attributes: STAKEHOLDER_ATTRS,
       include: [
-        { model: Process, as: "processes", attributes: ["id"], through: { attributes: [] } },
+        {
+          model: Process,
+          as: "processes",
+          attributes: ["id", "code", "name"],
+          through: { attributes: LINK_FIELDS },
+        },
       ],
     });
 
     const data = items.map((item) => {
       const json = toJSON(item);
-      json.processIds = (json.processes || []).map((p) => p.id);
-      delete json.processes;
+      // Format: processes: [{ id, code, name, link: { needs, ... } }]
+      json.processes = (json.processes || []).map((p) => {
+        const linkData = p.ProcessStakeholder || {};
+        const link = {};
+        for (const field of LINK_FIELDS) {
+          link[field] = linkData[field] ?? null;
+        }
+        return {
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          link,
+        };
+      });
+      json.processIds = json.processes.map((p) => p.id);
       return json;
     });
 
@@ -68,29 +94,16 @@ export async function adminCreateStakeholder(req, res) {
     return res.status(400).json({ error: "name is required" });
   }
 
-  // Optional fields
+  // Note: Les champs métier sont maintenant dans la table de jointure process_stakeholders
   const defaults = {
     name,
     isActive: typeof req.body?.isActive === "boolean" ? req.body.isActive : true,
-
-    needs: normalizeText(req.body?.needs),
-    expectations: normalizeText(req.body?.expectations),
-    evaluationCriteria: normalizeText(req.body?.evaluationCriteria),
-    requirements: normalizeText(req.body?.requirements),
-    strengths: normalizeText(req.body?.strengths),
-    weaknesses: normalizeText(req.body?.weaknesses),
-    opportunities: normalizeText(req.body?.opportunities),
-    risks: normalizeText(req.body?.risks),
-    actionPlan: normalizeText(req.body?.actionPlan),
   };
 
   const [item, created] = await Stakeholder.findOrCreate({
     where: { name },
     defaults,
   });
-
-  // If it already exists, we keep behavior minimal: return existing record (no overwrite).
-  // If you WANT to update existing when findOrCreate hits, do it explicitly here.
 
   const fresh = await Stakeholder.findByPk(item.id, { attributes: STAKEHOLDER_ATTRS });
   res.status(created ? 201 : 200).json({ data: toJSON(fresh) });
@@ -110,28 +123,14 @@ export async function adminPatchStakeholder(req, res) {
     patch.isActive = req.body.isActive;
   }
 
-  // New text fields (accept string OR null to clear)
-  const textFields = [
-    "needs",
-    "expectations",
-    "evaluationCriteria",
-    "requirements",
-    "strengths",
-    "weaknesses",
-    "opportunities",
-    "risks",
-    "actionPlan",
-  ];
+  // Note: Les champs métier sont maintenant dans la table de jointure process_stakeholders
+  // Ils ne sont plus gérés ici.
 
-  for (const key of textFields) {
-    if (req.body && Object.prototype.hasOwnProperty.call(req.body, key)) {
-      const v = req.body[key];
-      if (v === null) patch[key] = null;
-      else if (typeof v === "string") patch[key] = normalizeText(v);
-      else {
-        return res.status(400).json({ error: `${key} must be a string or null` });
-      }
-    }
+  if (Object.keys(patch).length === 0) {
+    // Rien à mettre à jour, retourner l'item actuel
+    const item = await Stakeholder.findByPk(id, { attributes: STAKEHOLDER_ATTRS });
+    if (!item) return res.status(404).json({ error: "Not Found" });
+    return res.json({ data: toJSON(item) });
   }
 
   const [updated] = await Stakeholder.update(patch, { where: { id } });
@@ -148,27 +147,46 @@ export async function adminDeleteStakeholder(req, res) {
   res.json({ data: { ok: true } });
 }
 
+/**
+ * Sets the processes for a stakeholder with enriched link fields.
+ * PUT /api/admin/stakeholders/:id/processes
+ *
+ * Accepte deux formats de body :
+ * - Legacy: { processIds: string[] } - juste les IDs sans champs de lien
+ * - New: { items: [{ processId, needs, expectations, ... }] } - avec champs de lien
+ *
+ * Behavior: "replace" - deletes missing links, upserts present ones.
+ */
 export async function adminSetStakeholderProcesses(req, res) {
   const id = validateUuid(req.params.id);
-
-  const processIds = req.body?.processIds;
-  if (!Array.isArray(processIds)) {
-    return res.status(400).json({ error: "processIds must be an array" });
-  }
 
   const stakeholder = await Stakeholder.findByPk(id);
   if (!stakeholder) {
     return res.status(404).json({ error: "Stakeholder not found" });
   }
 
-  // Validate that all processIds exist
-  if (processIds.length > 0) {
+  // Support legacy format (processIds array) and new format (items array)
+  let items = [];
+  if (Array.isArray(req.body?.items)) {
+    items = req.body.items;
+  } else if (Array.isArray(req.body?.processIds)) {
+    // Legacy format: convert to items without link fields
+    items = req.body.processIds.map((processId) => ({ processId }));
+  } else {
+    return res.status(400).json({ error: "items or processIds must be an array" });
+  }
+
+  // Validate all processIds exist
+  const processIds = items.map((item) => item.processId).filter(Boolean);
+  const uniqueIds = [...new Set(processIds)];
+
+  if (uniqueIds.length > 0) {
     const existingProcesses = await Process.findAll({
-      where: { id: processIds },
+      where: { id: uniqueIds },
       attributes: ["id"],
     });
     const existingIds = new Set(existingProcesses.map((p) => p.id));
-    const invalidIds = processIds.filter((pid) => !existingIds.has(pid));
+    const invalidIds = uniqueIds.filter((pid) => !existingIds.has(pid));
     if (invalidIds.length > 0) {
       return res
         .status(400)
@@ -176,7 +194,31 @@ export async function adminSetStakeholderProcesses(req, res) {
     }
   }
 
-  await stakeholder.setProcesses(processIds);
+  // Delete all existing links for this stakeholder
+  await ProcessStakeholder.destroy({ where: { stakeholderId: id } });
 
-  res.json({ data: { ok: true, processIds } });
+  // Create new links with enriched fields
+  const createdLinks = [];
+  for (const item of items) {
+    if (!item.processId) continue;
+
+    const linkData = {
+      processId: item.processId,
+      stakeholderId: id,
+      needs: normalizeText(item.needs),
+      expectations: normalizeText(item.expectations),
+      evaluationCriteria: normalizeText(item.evaluationCriteria),
+      requirements: normalizeText(item.requirements),
+      strengths: normalizeText(item.strengths),
+      weaknesses: normalizeText(item.weaknesses),
+      opportunities: normalizeText(item.opportunities),
+      risks: normalizeText(item.risks),
+      actionPlan: normalizeText(item.actionPlan),
+    };
+
+    const created = await ProcessStakeholder.create(linkData);
+    createdLinks.push(created);
+  }
+
+  res.json({ data: { ok: true, count: createdLinks.length } });
 }

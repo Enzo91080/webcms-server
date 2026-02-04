@@ -15,7 +15,8 @@ import {
   replaceSipoc,
   resolveCodes,
   resolveIdByCode,
-  adminSetProcessPilots
+  adminSetProcessPilots,
+  adminSetProcessStakeholders
 } from "../controllers/process.controller.js";
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
@@ -52,4 +53,5 @@ adminProcessRoutes.get("/:id", asyncHandler(getById));
 adminProcessRoutes.post("/", asyncHandler(createProcess));
 adminProcessRoutes.patch("/:id", asyncHandler(patchProcess));
 adminProcessRoutes.put("/:id/pilots", asyncHandler(adminSetProcessPilots));
+adminProcessRoutes.put("/:id/stakeholders", asyncHandler(adminSetProcessStakeholders));
 adminProcessRoutes.delete("/:id", asyncHandler(deleteProcess));
