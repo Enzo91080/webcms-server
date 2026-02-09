@@ -9,6 +9,24 @@ export const Process = sequelize.define(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
     },
+    cartographySlot: {
+      type: DataTypes.ENUM(
+        "manager",
+        "value_chain",
+        "left_panel",
+        "right_panel",
+        "left_box",
+        "right_box"
+      ),
+      allowNull: true,
+      defaultValue: null,
+    },
+    cartographyOrder: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: null,
+    },
+
     parentProcessId: {
       type: DataTypes.UUID,
       allowNull: true,
@@ -38,6 +56,11 @@ export const Process = sequelize.define(
     isActive: {
       type: DataTypes.BOOLEAN,
       defaultValue: true,
+    },
+    processType: {
+      type: DataTypes.ENUM("internal", "external"),
+      allowNull: true,
+      defaultValue: null,
     },
     title: {
       type: DataTypes.TEXT,

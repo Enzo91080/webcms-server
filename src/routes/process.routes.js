@@ -10,6 +10,7 @@ import {
   getPath,
   getSipocRows,
   listAll,
+  listLite,
   patchProcess,
   replaceLogigramme,
   replaceSipoc,
@@ -25,6 +26,7 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 export const processRoutes = Router();
 
 processRoutes.get("/cartography", asyncHandler(getCartography));
+processRoutes.get("/lite", asyncHandler(listLite));
 processRoutes.post("/resolve-codes", asyncHandler(resolveCodes));
 processRoutes.get("/resolve-id/:code", asyncHandler(resolveIdByCode));
 processRoutes.get("/by-code/:code", asyncHandler(getByCode));

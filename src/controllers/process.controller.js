@@ -178,22 +178,58 @@ async function fetchSipocForProcess(processId) {
 // ============================================================================
 // PUBLIC API - Cartography & Discovery
 // ============================================================================
-
 export async function getCartography(req, res) {
   const roots = await Process.findAll({
     where: { parentProcessId: null, isActive: true },
-    order: [["orderInParent", "ASC"]],
-    attributes: ["id", "code", "name", "title", "orderInParent", "isActive"],
+    order: [
+      ["cartographySlot", "ASC"],
+      ["cartographyOrder", "ASC"],
+      ["orderInParent", "ASC"],
+    ],
+    attributes: [
+      "id",
+      "code",
+      "name",
+      "title",
+      "processType",
+      "orderInParent",
+      "cartographySlot",
+      "cartographyOrder",
+    ],
   });
 
-  res.json({ data: roots.map(toJSON) });
+  const data = roots.map(toJSON);
+
+  const pickOne = (slot) => data.find((p) => p.cartographySlot === slot) || null;
+  const pickMany = (slot) =>
+    data
+      .filter((p) => p.cartographySlot === slot)
+      .sort((a, b) => (a.cartographyOrder ?? 9999) - (b.cartographyOrder ?? 9999));
+
+  res.json({
+    data: {
+      manager: pickOne("manager"),
+      valueChain: pickMany("value_chain"),
+      roots: data, // optionnel, utile pour debug/admin
+    },
+  });
+}
+
+
+
+export async function listLite(req, res) {
+  const items = await Process.findAll({
+    attributes: ["id", "code", "name", "processType"],
+    order: [["code", "ASC"]],
+  });
+  res.json({ data: items.map(toJSON) });
 }
 
 export async function listAll(req, res) {
   const items = await Process.findAll({
     include: processBaseIncludes(),
     order: [["parentProcessId", "ASC"], ["orderInParent", "ASC"], ["code", "ASC"]],
-    attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "updatedAt", "createdAt"],
+    attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "processType", "updatedAt", "createdAt"],
   });
 
   res.json({ data: items.map(toJSON) });
