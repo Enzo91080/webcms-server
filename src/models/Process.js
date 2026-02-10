@@ -62,6 +62,14 @@ export const Process = sequelize.define(
       allowNull: true,
       defaultValue: null,
     },
+    color: {
+      type: DataTypes.STRING(7),
+      allowNull: true,
+      defaultValue: null,
+      validate: {
+        is: /^#[0-9a-fA-F]{6}$/,
+      },
+    },
     title: {
       type: DataTypes.TEXT,
       defaultValue: "",
@@ -75,6 +83,10 @@ export const Process = sequelize.define(
       allowNull: true,
     },
     // pilots: ancien champ JSONB supprimé, remplacé par relation many-to-many (process_pilots)
+    showAdvancedStakeholders: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
     referenceDocuments: {
       type: DataTypes.JSONB,
       allowNull: true,

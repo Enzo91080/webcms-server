@@ -9,6 +9,7 @@ import { Sipoc } from "./Sipoc.js";
 import { SipocPhase } from "./SipocPhase.js";
 import { SipocRow } from "./SipocRow.js";
 import { ProcessStakeholder } from "./ProcessStakeholder.js";
+import { CartographyLayout } from "./CartographyLayout.js";
 
 // Self-referential hierarchy (already used by controllers)
 Process.hasMany(Process, { foreignKey: "parentProcessId", as: "children" });
@@ -63,5 +64,9 @@ SipocPhase.belongsTo(Sipoc, { as: "sipoc", foreignKey: "sipocId" });
 SipocPhase.hasMany(SipocRow, { as: "rows", foreignKey: "sipocPhaseId", onDelete: "CASCADE" });
 SipocRow.belongsTo(SipocPhase, { as: "sipocPhase", foreignKey: "sipocPhaseId" });
 
+// CartographyLayout <-> Process
+CartographyLayout.belongsTo(Process, { as: "process", foreignKey: "processId", onDelete: "CASCADE" });
+Process.hasMany(CartographyLayout, { as: "cartographyLayouts", foreignKey: "processId" });
+
 // Exporting models is optional here; the imports above are enough to register them.
-export { Process, User, Stakeholder, Pilot, Sipoc, SipocPhase, SipocRow, ProcessStakeholder };
+export { Process, User, Stakeholder, Pilot, Sipoc, SipocPhase, SipocRow, ProcessStakeholder, CartographyLayout };

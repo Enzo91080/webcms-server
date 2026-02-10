@@ -6,6 +6,7 @@ import { Pilot } from "../models/Pilot.js";
 import { Sipoc } from "../models/Sipoc.js";
 import { SipocPhase } from "../models/SipocPhase.js";
 import { SipocRow } from "../models/SipocRow.js";
+import { CartographyLayout } from "../models/CartographyLayout.js";
 
 // ============================================================================
 // CONSTANTS
@@ -124,12 +125,29 @@ function transformProcess(process, sipocData = null) {
 // SIPOC (normalized tables) -> DTO
 // ============================================================================
 
+function parseJsonArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  try {
+    const parsed = JSON.parse(val);
+    return Array.isArray(parsed) ? parsed : [val];
+  } catch {
+    return [val];
+  }
+}
+
+function serializeArray(val) {
+  if (!val) return null;
+  if (Array.isArray(val)) return val.length ? JSON.stringify(val) : null;
+  return JSON.stringify([val]);
+}
+
 function sipocRowToDto(row) {
   return {
     ref: row.ref ?? undefined,
     phase: row.phase ?? undefined,
     numero: row.numero ?? undefined,
-    processusFournisseur: row.processusFournisseur ?? undefined,
+    processusFournisseur: parseJsonArray(row.processusFournisseur),
     entrees: row.entrees ?? undefined,
     ressources: row.ressources ?? undefined,
     raciR: row.raciR ?? undefined,
@@ -138,9 +156,9 @@ function sipocRowToDto(row) {
     raciI: row.raciI ?? undefined,
     designation: row.designation ?? undefined,
     sorties: row.sorties ?? undefined,
-    processusClient: row.processusClient ?? undefined,
+    processusClient: parseJsonArray(row.processusClient),
     activitePhase: row.activitePhase ?? undefined,
-    designationProcessusClient: row.designationProcessusClient ?? undefined,
+    designationProcessusClient: parseJsonArray(row.designationProcessusClient),
     sortiesProcessusClient: row.sortiesProcessusClient ?? undefined,
   };
 }
@@ -179,38 +197,34 @@ async function fetchSipocForProcess(processId) {
 // PUBLIC API - Cartography & Discovery
 // ============================================================================
 export async function getCartography(req, res) {
-  const roots = await Process.findAll({
-    where: { parentProcessId: null, isActive: true },
-    order: [
-      ["cartographySlot", "ASC"],
-      ["cartographyOrder", "ASC"],
-      ["orderInParent", "ASC"],
+  const items = await CartographyLayout.findAll({
+    where: { isActive: true },
+    include: [
+      {
+        model: Process,
+        as: "process",
+        attributes: ["id", "code", "name", "color"],
+      },
     ],
-    attributes: [
-      "id",
-      "code",
-      "name",
-      "title",
-      "processType",
-      "orderInParent",
-      "cartographySlot",
-      "cartographyOrder",
+    order: [
+      ["slotKey", "ASC"],
+      ["slotOrder", "ASC"],
     ],
   });
 
-  const data = roots.map(toJSON);
+  const rows = items.map(toJSON);
 
-  const pickOne = (slot) => data.find((p) => p.cartographySlot === slot) || null;
-  const pickMany = (slot) =>
-    data
-      .filter((p) => p.cartographySlot === slot)
-      .sort((a, b) => (a.cartographyOrder ?? 9999) - (b.cartographyOrder ?? 9999));
+  const pickOne = (slot) => rows.find((r) => r.slotKey === slot) || null;
+  const pickMany = (slot) => rows.filter((r) => r.slotKey === slot);
 
   res.json({
     data: {
       manager: pickOne("manager"),
       valueChain: pickMany("value_chain"),
-      roots: data, // optionnel, utile pour debug/admin
+      leftPanel: pickMany("left_panel"),
+      rightPanel: pickMany("right_panel"),
+      leftBox: pickMany("left_box"),
+      rightBox: pickMany("right_box"),
     },
   });
 }
@@ -219,7 +233,7 @@ export async function getCartography(req, res) {
 
 export async function listLite(req, res) {
   const items = await Process.findAll({
-    attributes: ["id", "code", "name", "processType"],
+    attributes: ["id", "code", "name", "processType", "parentProcessId", "color"],
     order: [["code", "ASC"]],
   });
   res.json({ data: items.map(toJSON) });
@@ -229,7 +243,7 @@ export async function listAll(req, res) {
   const items = await Process.findAll({
     include: processBaseIncludes(),
     order: [["parentProcessId", "ASC"], ["orderInParent", "ASC"], ["code", "ASC"]],
-    attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "processType", "updatedAt", "createdAt"],
+    attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "processType", "color", "showAdvancedStakeholders", "updatedAt", "createdAt"],
   });
 
   res.json({ data: items.map(toJSON) });
@@ -482,7 +496,7 @@ export async function replaceSipoc(req, res) {
         ref: rowDto.ref ?? null,
         phase: rowDto.phase ?? phaseDto.name ?? null,
         numero: rowDto.numero != null ? String(rowDto.numero) : null,
-        processusFournisseur: rowDto.processusFournisseur ?? null,
+        processusFournisseur: serializeArray(rowDto.processusFournisseur),
         entrees: rowDto.entrees ?? null,
         ressources: rowDto.ressources ?? null,
         raciR: rowDto.raciR ?? null,
@@ -491,10 +505,10 @@ export async function replaceSipoc(req, res) {
         raciI: rowDto.raciI ?? null,
         designation: rowDto.designation ?? null,
         sorties: rowDto.sorties ?? null,
-        processusClient: rowDto.processusClient ?? null,
+        processusClient: serializeArray(rowDto.processusClient),
         designationProcessusVendre: rowDto.designationProcessusVendre ?? null,
         activitePhase: rowDto.activitePhase ?? null,
-        designationProcessusClient: rowDto.designationProcessusClient ?? null,
+        designationProcessusClient: serializeArray(rowDto.designationProcessusClient),
         sortiesProcessusClient: rowDto.sortiesProcessusClient ?? null,
       });
     }
@@ -525,7 +539,38 @@ export async function deleteProcess(req, res) {
   const deleted = await Process.destroy({ where: { id } });
   if (!deleted) return res.status(404).json({ error: "Not Found" });
 
+  // Clean up SIPOC references to this deleted process
+  await cleanSipocReferences(id);
+
   res.json({ data: { ok: true } });
+}
+
+/**
+ * Remove a process ID from all SIPOC rows that reference it
+ * in processusFournisseur, processusClient, or designationProcessusClient.
+ */
+async function cleanSipocReferences(processId) {
+  const fields = ["processusFournisseur", "processusClient", "designationProcessusClient"];
+  const rows = await SipocRow.findAll({
+    where: {
+      [Op.or]: fields.map((f) => ({
+        [f]: { [Op.like]: `%${processId}%` },
+      })),
+    },
+  });
+
+  for (const row of rows) {
+    let changed = false;
+    for (const field of fields) {
+      const arr = parseJsonArray(row[field]);
+      const filtered = arr.filter((v) => v !== processId);
+      if (filtered.length !== arr.length) {
+        row[field] = filtered.length ? JSON.stringify(filtered) : null;
+        changed = true;
+      }
+    }
+    if (changed) await row.save();
+  }
 }
 
 // ============================================================================

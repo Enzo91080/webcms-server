@@ -5,3 +5,4 @@ export { ProcessStakeholder } from "./ProcessStakeholder.js";
 export { Sipoc } from "./Sipoc.js";
 export { SipocPhase } from "./SipocPhase.js";
 export { SipocRow } from "./SipocRow.js";
+export { CartographyLayout } from "./CartographyLayout.js";

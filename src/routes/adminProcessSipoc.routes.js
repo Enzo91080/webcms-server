@@ -21,6 +21,30 @@ function validateUuid(id) {
 }
 
 /**
+ * Parse a TEXT column that may contain a JSON array or a legacy single string.
+ * Always returns an array of strings.
+ */
+function parseJsonArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  try {
+    const parsed = JSON.parse(val);
+    return Array.isArray(parsed) ? parsed : [val];
+  } catch {
+    return [val];
+  }
+}
+
+/**
+ * Serialize an array to JSON string for TEXT column storage.
+ */
+function serializeArray(val) {
+  if (!val) return null;
+  if (Array.isArray(val)) return val.length ? JSON.stringify(val) : null;
+  return JSON.stringify([val]);
+}
+
+/**
  * Maps a SipocRow model instance to the DTO format expected by the frontend.
  */
 function rowToDto(row) {
@@ -28,7 +52,7 @@ function rowToDto(row) {
     ref: row.ref ?? undefined,
     phase: row.phase ?? undefined,
     numero: row.numero ?? undefined,
-    processusFournisseur: row.processusFournisseur ?? undefined,
+    processusFournisseur: parseJsonArray(row.processusFournisseur),
     entrees: row.entrees ?? undefined,
     ressources: row.ressources ?? undefined,
     // RACI fields
@@ -38,9 +62,9 @@ function rowToDto(row) {
     raciI: row.raciI ?? undefined,
     designation: row.designation ?? undefined,
     sorties: row.sorties ?? undefined,
-    processusClient: row.processusClient ?? undefined,
+    processusClient: parseJsonArray(row.processusClient),
     activitePhase: row.activitePhase ?? undefined,
-    designationProcessusClient: row.designationProcessusClient ?? undefined,
+    designationProcessusClient: parseJsonArray(row.designationProcessusClient),
     sortiesProcessusClient: row.sortiesProcessusClient ?? undefined,
   };
 }
@@ -64,7 +88,7 @@ function dtoToRowFields(dto) {
     ref: dto.ref ?? null,
     phase: dto.phase ?? null,
     numero: dto.numero != null ? String(dto.numero) : null,
-    processusFournisseur: dto.processusFournisseur ?? null,
+    processusFournisseur: serializeArray(dto.processusFournisseur),
     entrees: dto.entrees ?? null,
     ressources: dto.ressources ?? null,
     // RACI fields
@@ -74,10 +98,10 @@ function dtoToRowFields(dto) {
     raciI: dto.raciI ?? null,
     designation: dto.designation ?? null,
     sorties: dto.sorties ?? null,
-    processusClient: dto.processusClient ?? null,
+    processusClient: serializeArray(dto.processusClient),
     designationProcessusVendre: dto.designationProcessusVendre ?? null,
     activitePhase: dto.activitePhase ?? null,
-    designationProcessusClient: dto.designationProcessusClient ?? null,
+    designationProcessusClient: serializeArray(dto.designationProcessusClient),
     sortiesProcessusClient: dto.sortiesProcessusClient ?? null,
   };
 }
