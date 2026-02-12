@@ -7,6 +7,8 @@ import { Sipoc } from "../models/Sipoc.js";
 import { SipocPhase } from "../models/SipocPhase.js";
 import { SipocRow } from "../models/SipocRow.js";
 import { CartographyLayout } from "../models/CartographyLayout.js";
+import { CartographyPanelStakeholder } from "../models/CartographyPanelStakeholder.js";
+import { CartographyPanelConfig } from "../models/CartographyPanelConfig.js";
 
 // ============================================================================
 // CONSTANTS
@@ -197,25 +199,56 @@ async function fetchSipocForProcess(processId) {
 // PUBLIC API - Cartography & Discovery
 // ============================================================================
 export async function getCartography(req, res) {
-  const items = await CartographyLayout.findAll({
-    where: { isActive: true },
-    include: [
-      {
-        model: Process,
-        as: "process",
-        attributes: ["id", "code", "name", "color"],
-      },
-    ],
-    order: [
-      ["slotKey", "ASC"],
-      ["slotOrder", "ASC"],
-    ],
-  });
+  const [items, panelItems, panelConfigs, allStakeholders] = await Promise.all([
+    CartographyLayout.findAll({
+      where: { isActive: true },
+      include: [
+        {
+          model: Process,
+          as: "process",
+          attributes: ["id", "code", "name", "color"],
+        },
+      ],
+      order: [
+        ["slotKey", "ASC"],
+        ["slotOrder", "ASC"],
+      ],
+    }),
+    CartographyPanelStakeholder.findAll({
+      include: [
+        { model: Stakeholder, as: "stakeholder", attributes: ["id", "name"] },
+      ],
+      order: [
+        ["panelKey", "ASC"],
+        ["panelOrder", "ASC"],
+      ],
+    }),
+    CartographyPanelConfig.findAll(),
+    Stakeholder.findAll({
+      where: { isActive: true },
+      order: [["name", "ASC"]],
+      attributes: ["id", "name"],
+    }),
+  ]);
 
   const rows = items.map(toJSON);
+  const panels = panelItems.map(toJSON);
+
+  const configMap = {};
+  for (const c of panelConfigs) {
+    configMap[c.panelKey] = c.mode;
+  }
 
   const pickOne = (slot) => rows.find((r) => r.slotKey === slot) || null;
   const pickMany = (slot) => rows.filter((r) => r.slotKey === slot);
+
+  const resolvePanel = (panelKey) => {
+    const mode = configMap[panelKey] || "all";
+    if (mode === "all") {
+      return allStakeholders.map((s) => s.toJSON());
+    }
+    return panels.filter((p) => p.panelKey === panelKey).map((p) => p.stakeholder);
+  };
 
   res.json({
     data: {
@@ -223,8 +256,8 @@ export async function getCartography(req, res) {
       valueChain: pickMany("value_chain"),
       leftPanel: pickMany("left_panel"),
       rightPanel: pickMany("right_panel"),
-      leftBox: pickMany("left_box"),
-      rightBox: pickMany("right_box"),
+      leftStakeholders: resolvePanel("left_panel"),
+      rightStakeholders: resolvePanel("right_panel"),
     },
   });
 }
@@ -243,7 +276,7 @@ export async function listAll(req, res) {
   const items = await Process.findAll({
     include: processBaseIncludes(),
     order: [["parentProcessId", "ASC"], ["orderInParent", "ASC"], ["code", "ASC"]],
-    attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "processType", "color", "showAdvancedStakeholders", "updatedAt", "createdAt"],
+    attributes: ["id", "code", "name", "parentProcessId", "orderInParent", "isActive", "processType", "color", "showAdvancedStakeholders", "title", "objectives", "objectivesBlocks", "referenceDocuments", "updatedAt", "createdAt"],
   });
 
   res.json({ data: items.map(toJSON) });

@@ -15,6 +15,19 @@ const LINK_FIELDS = [
   "actionPlan",
 ];
 
+// ── Public ──────────────────────────────────────────
+
+export async function listStakeholders(req, res) {
+  const items = await Stakeholder.findAll({
+    where: { isActive: true },
+    order: [["name", "ASC"]],
+    attributes: ["id", "name"],
+  });
+  res.json({ data: items.map(toJSON) });
+}
+
+// ── Helpers ─────────────────────────────────────────
+
 function validateUuid(id) {
   if (!id || typeof id !== "string") {
     const err = new Error("Invalid id");

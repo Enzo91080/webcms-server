@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  listStakeholders,
   adminCreateStakeholder,
   adminDeleteStakeholder,
   adminListStakeholders,
@@ -9,6 +10,11 @@ import {
 import { requireAdmin, requireAuth } from "../middleware/auth.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 
+// Public
+export const stakeholderRoutes = Router();
+stakeholderRoutes.get("/", asyncHandler(listStakeholders));
+
+// Admin
 export const adminStakeholderRoutes = Router();
 
 adminStakeholderRoutes.use(requireAuth, requireAdmin);

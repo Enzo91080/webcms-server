@@ -235,10 +235,10 @@ async function run() {
     {
       code: "P04",
       name: "Manager le Programme",
-      title: "Gouverner, piloter la performance et les risques.",
+      title: "Gouverner, piloter la performance et les Menaces.",
       parentProcessId: null,
       orderInParent: 4,
-      objectives: md(["- Assurer la gouvernance.", "- Suivre les KPI.", "- Gerer les risques et arbitrages."]),
+      objectives: md(["- Assurer la gouvernance.", "- Suivre les KPI.", "- Gerer les Menaces et arbitrages."]),
       stakeholders: ["PMO", "Direction", "Qualite"],
       referenceDocuments: [{ code: "DOC-PROG-001", title: "Plan de management programme", type: "PDF", url: urlDoc("docs/pmp.pdf") }],
     },
@@ -315,7 +315,7 @@ async function run() {
     { code: "SP0303", name: "Valider le planning", title: "Arbitrer et publier un planning.", parentProcessId: getParentId(P03), orderInParent: 3, stakeholders: ["Direction", "Programme"] },
     { code: "SP0401", name: "Gouvernance", title: "Organiser comites et decisions.", parentProcessId: getParentId(P04), orderInParent: 1, stakeholders: ["PMO", "Direction"] },
     { code: "SP0402", name: "Suivi KPI", title: "Suivre indicateurs et performance.", parentProcessId: getParentId(P04), orderInParent: 2, stakeholders: ["PMO", "Qualite"] },
-    { code: "SP0403", name: "Gestion des risques", title: "Identifier, traiter et suivre les risques.", parentProcessId: getParentId(P04), orderInParent: 3, stakeholders: ["PMO", "Operations"] },
+    { code: "SP0403", name: "Gestion des Menaces", title: "Identifier, traiter et suivre les Menaces.", parentProcessId: getParentId(P04), orderInParent: 3, stakeholders: ["PMO", "Operations"] },
     { code: "SP0501", name: "Executer", title: "Realiser les activites prevues.", parentProcessId: getParentId(P05), orderInParent: 1, stakeholders: ["Operations"] },
     { code: "SP0502", name: "Controler la qualite", title: "Controler conformite et traiter non-conformites.", parentProcessId: getParentId(P05), orderInParent: 2, stakeholders: ["Qualite", "Operations"] },
     { code: "SP0503", name: "Livrer", title: "Preparer et livrer le resultat.", parentProcessId: getParentId(P05), orderInParent: 3, stakeholders: ["Operations", "Client"] },
@@ -443,14 +443,14 @@ async function run() {
           name: "Phase 2 - Pilotage",
           rows: [
             { ref: "PROG-02", phase: "Phase 2 - Pilotage", processusFournisseur: "Programme", entrees: "Rituels", numero: "2", ressources: "Tableaux", designation: { name: "Suivre les KPI", url: urlProcess("SP0402") }, sorties: "KPI a jour", processusClient: "Direction" },
-            { ref: "PROG-03", phase: "Phase 2 - Pilotage", processusFournisseur: "Programme", entrees: "KPI", numero: "3", ressources: "Registre", designation: { name: "Gerer les risques", url: urlProcess("SP0403") }, sorties: "Risques traites", processusClient: "Direction" },
+            { ref: "PROG-03", phase: "Phase 2 - Pilotage", processusFournisseur: "Programme", entrees: "KPI", numero: "3", ressources: "Registre", designation: { name: "Gerer les Menaces", url: urlProcess("SP0403") }, sorties: "Menaces traites", processusClient: "Direction" },
           ],
         },
         {
           key: "P04-PH3",
           name: "Phase 3 - Arbitrage",
           rows: [
-            { ref: "PROG-04", phase: "Phase 3 - Arbitrage", processusFournisseur: "Direction", entrees: "Risques", numero: "4", ressources: "Arbitrage", designation: { name: "Decider / arbitrer", url: urlDoc("sipoc/programme/arbitrer") }, sorties: "Decisions", processusClient: "Tous" },
+            { ref: "PROG-04", phase: "Phase 3 - Arbitrage", processusFournisseur: "Direction", entrees: "Menaces", numero: "4", ressources: "Arbitrage", designation: { name: "Decider / arbitrer", url: urlDoc("sipoc/programme/arbitrer") }, sorties: "Decisions", processusClient: "Tous" },
           ],
         },
       ],
