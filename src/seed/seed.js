@@ -4,9 +4,13 @@ import "../models/initModels.js";
 import { Process } from "../models/Process.js";
 import { User } from "../models/User.js";
 import { Stakeholder } from "../models/Stakeholder.js";
+import { Pilot } from "../models/Pilot.js";
 import { Sipoc } from "../models/Sipoc.js";
 import { SipocPhase } from "../models/SipocPhase.js";
 import { SipocRow } from "../models/SipocRow.js";
+import { ProcessStakeholder } from "../models/ProcessStakeholder.js";
+import { CartographyLayout } from "../models/CartographyLayout.js";
+import { CartographyPanelConfig } from "../models/CartographyPanelConfig.js";
 import { hashPassword } from "../utils/auth.js";
 
 function md(lines) {
@@ -72,20 +76,17 @@ function buildLogigrammeFromSipoc(
 }
 
 /**
- * Creates SIPOC entries in the new normalized tables (Sipoc, SipocPhase, SipocRow)
+ * Creates SIPOC entries in the normalized tables (Sipoc, SipocPhase, SipocRow)
  */
 async function createSipocForProcess(processId, phasesData) {
-  // Delete existing SIPOC for this process (if any)
   const existingSipoc = await Sipoc.findOne({ where: { processId } });
   if (existingSipoc) {
     await SipocPhase.destroy({ where: { sipocId: existingSipoc.id } });
     await existingSipoc.destroy();
   }
 
-  // Create new Sipoc
   const sipoc = await Sipoc.create({ processId });
 
-  // Create phases and rows
   for (let phaseIndex = 0; phaseIndex < phasesData.length; phaseIndex++) {
     const phaseData = phasesData[phaseIndex];
 
@@ -116,6 +117,10 @@ async function createSipocForProcess(processId, phasesData) {
         activitePhase: rowData.activitePhase || rowData.designation || null,
         designationProcessusClient: rowData.designationProcessusClient || rowData.processusClient || null,
         sortiesProcessusClient: rowData.sortiesProcessusClient || null,
+        raci_r: rowData.raci_r || null,
+        raci_a: rowData.raci_a || null,
+        raci_c: rowData.raci_c || null,
+        raci_i: rowData.raci_i || null,
       });
     }
   }
@@ -130,284 +135,355 @@ async function run() {
   await sequelize.sync({ force: false });
   console.log("[seed] database synchronized");
 
-  // --- Admin user (unique) ---
+  // ─── USERS ──────────────────────────────────────────────────
   await User.destroy({ where: {} });
-  const adminEmail = env.adminEmail;
-  const adminPassword = env.adminPassword;
-  const passwordHash = await hashPassword(adminPassword);
-  await User.create({
-    email: adminEmail,
-    passwordHash,
-    role: "admin",
-    name: "Administrateur",
-  });
-  console.log(`[seed] admin created: ${adminEmail} / ${adminPassword}`);
+  const adminPassword = await hashPassword(env.adminPassword);
+  await User.bulkCreate([
+    {
+      email: env.adminEmail,
+      passwordHash: adminPassword,
+      role: "admin",
+      name: "Administrateur",
+    },
+    {
+      email: "enzo.aime91@gmail.com",
+      passwordHash: await hashPassword("Admin123!"),
+      role: "admin",
+      name: "Enzo",
+    },
+  ]);
+  console.log("[seed] users created");
 
-  // Clean up existing data
+  // ─── PILOTS ─────────────────────────────────────────────────
+  await sequelize.models.Pilot.destroy({ where: {}, truncate: true, cascade: true }).catch(() =>
+    Pilot.destroy({ where: {} })
+  );
+  const pilots = await Pilot.bulkCreate(
+    [
+      { name: "Enzo AIME" },
+      { name: "Gérard Philippe" },
+    ],
+    { returning: true }
+  );
+  console.log("[seed] pilots created");
+
+  const pilotByName = (name) => pilots.find((p) => p.name === name);
+
+  // ─── STAKEHOLDERS ──────────────────────────────────────────
+  await ProcessStakeholder.destroy({ where: {} });
+  await Stakeholder.destroy({ where: {} });
+
+  const stakeholderNames = [
+    "Direction",
+    "Finance",
+    "RH",
+    "Commercial",
+    "Avant-vente",
+    "Programme",
+    "Operations",
+    "PMO",
+    "Client",
+    "Juridique",
+    "Qualité",
+    "ADV",
+  ];
+
+  const stakeholders = await Stakeholder.bulkCreate(
+    stakeholderNames.map((name) => ({ name, isActive: true })),
+    { returning: true }
+  );
+  console.log("[seed] stakeholders created");
+
+  const stk = (name) => stakeholders.find((s) => s.name === name);
+
+  // ─── CLEAN PROCESSES & SIPOC ────────────────────────────────
   await SipocRow.destroy({ where: {} });
   await SipocPhase.destroy({ where: {} });
   await Sipoc.destroy({ where: {} });
+  await CartographyLayout.destroy({ where: {} });
   await Process.destroy({ where: {} });
   console.log("[seed] cleaned existing data");
 
-  async function setStakeholders(process, names) {
-    const arr = Array.isArray(names) ? names : [];
-    const unique = [...new Set(arr.map((x) => String(x || "").trim()).filter(Boolean))];
-    const instances = [];
-    for (const name of unique) {
-      const [s] = await Stakeholder.findOrCreate({
-        where: { name },
-        defaults: { name, isActive: true },
-      });
-      instances.push(s);
-    }
-    await process.setStakeholders(instances);
-  }
-
-  // --- Racines (ordre impose) ---
+  // ─── ROOT PROCESSES ─────────────────────────────────────────
   const rootsPayload = [
     {
-      code: "P01",
+      code: "MNGT",
       name: "Manager l'entreprise",
-      title: "Definir la strategie, piloter l'entreprise et assurer la conformite.",
-      parentProcessId: null,
+      title: "Définir la strategie, piloter l'entreprise et assurer la conformite.",
       orderInParent: 1,
+      processType: "internal",
       objectives: md([
         "1. Definir la strategie de l'entreprise, c'est definir :",
-        "   - l'OP",
-        "   - la Politique qualite",
-        "   - les objectifs de la societe",
-        "   - la Communication",
-        "   - l'adequation charge/capacite des Ressources Humaines",
-        "2. Piloter les finances",
-        "3. Piloter les Ressources Humaines",
-        "4. Mettre en oeuvre la communication",
-        "5. Piloter l'amelioration et la realisation des objectifs",
-        "6. S'assurer de la disponibilite des moyens",
-        "7. Assurer la gestion de la documentation",
-        "8. Maintenir la licence operateur (repondre aux prescriptions annuelles)",
-        "9. Piloter la chaine de valeur",
+        "2. l'OP",
+        "3. la Politique qualite",
+        "4. Les objectifs de la societe",
+        "5. La Communication",
+        "6. L'adequation charge/capacite des Ressources Humaines",
+        "7. Piloter les finances",
+        "8.Piloter les Ressources Humaines",
+        "9. Mettre en oeuvre la communication",
+        "10. Piloter l'amelioration et la realisation des objectifs",
+        "11. S'assurer de la disponibilite des moyens",
+        "12. Assurer la gestion de la documentation",
+        "13. Maintenir la licence operateur (repondre aux prescriptions annuelles)",
+        "14. Piloter la chaine de valeur",
       ]),
-      stakeholders: ["Direction", "Qualite", "Finance", "RH"],
-      referenceDocuments: [
+      objectivesBlocks: [
+        { text: "Definir la strategie de l'entreprise, c'est definir :", type: "text" },
         {
-          code: "DOC-MAN-001",
-          title: "Revue de direction - trame",
-          type: "DOCX",
-          url: urlDoc("docs/revue-direction.docx"),
-        },
-        {
-          code: "DOC-MAN-002",
-          title: "Politique qualite - modele",
-          type: "PDF",
-          url: urlDoc("docs/politique-qualite.pdf"),
+          type: "numbered",
+          items: [
+            "l'OP",
+            "la Politique qualite",
+            "les objectifs de la societe",
+            "la Communication",
+            "l'adequation charge/capacite des Ressources Humaines",
+            "Piloter les Ressources Humaines",
+            "Mettre en oeuvre la communication",
+            "Piloter l'amelioration et la realisation des objectifs",
+            "S'assurer de la disponibilite des moyens",
+            "Assurer la gestion de la documentation",
+            "Maintenir la licence operateur (repondre aux prescriptions annuelles)",
+            "Piloter la chaine de valeur",
+          ],
         },
       ],
+      referenceDocuments: [],
+      cartoSlot: "manager",
+      cartoOrder: 1,
+      stakeholderNames: ["Direction", "Client", "Qualité", "ADV"],
+      pilotNames: ["Enzo AIME"],
     },
     {
-      code: "P02",
+      code: "VEN",
       name: "Vendre",
       title: "Transformer des opportunites en contrats et commandes.",
-      parentProcessId: null,
       orderInParent: 2,
+      processType: "internal",
       objectives: md([
         "- Prospecter et qualifier les opportunites.",
         "- Construire une offre conforme au besoin.",
         "- Negocier et contractualiser.",
         "- Transmettre a la planification / execution.",
       ]),
-      stakeholders: ["Commercial", "Avant-vente", "ADV", "Finance"],
-      referenceDocuments: [
-        { code: "DOC-VEN-001", title: "Guide de qualification", type: "PDF", url: urlDoc("docs/qualification.pdf") },
-        { code: "DOC-VEN-002", title: "Modele de contrat", type: "DOCX", url: urlDoc("docs/contrat.docx") },
-      ],
+      objectivesBlocks: [],
+      referenceDocuments: [],
+      cartoSlot: "value_chain",
+      cartoOrder: 2,
+      stakeholderNames: ["Finance", "Commercial", "Avant-vente", "ADV"],
     },
     {
-      code: "P03",
+      code: "PLA",
       name: "Planifier",
       title: "Organiser la charge, la capacite et le planning.",
-      parentProcessId: null,
       orderInParent: 3,
+      processType: "internal",
       objectives: md(["- Collecter les besoins.", "- Allouer les ressources.", "- Publier un planning valide."]),
-      stakeholders: ["Programme", "Operations", "RH"],
-      referenceDocuments: [{ code: "DOC-PLA-001", title: "Regles de planification", type: "PDF", url: urlDoc("docs/regles-planification.pdf") }],
+      objectivesBlocks: [],
+      referenceDocuments: [],
+      cartoSlot: "value_chain",
+      cartoOrder: 3,
+      stakeholderNames: ["RH", "Programme", "Operations"],
     },
     {
-      code: "P04",
+      code: "PROG",
       name: "Manager le Programme",
-      title: "Gouverner, piloter la performance et les Menaces.",
-      parentProcessId: null,
+      title: "Gouverner, piloter la performance et les risques.",
       orderInParent: 4,
-      objectives: md(["- Assurer la gouvernance.", "- Suivre les KPI.", "- Gerer les Menaces et arbitrages."]),
-      stakeholders: ["PMO", "Direction", "Qualite"],
-      referenceDocuments: [{ code: "DOC-PROG-001", title: "Plan de management programme", type: "PDF", url: urlDoc("docs/pmp.pdf") }],
+      processType: "internal",
+      objectives: md(["- Assurer la gouvernance.", "- Suivre les KPI.", "- Gerer les risques et arbitrages."]),
+      objectivesBlocks: [],
+      referenceDocuments: [],
+      cartoSlot: "value_chain",
+      cartoOrder: 4,
+      stakeholderNames: ["Direction", "PMO"],
     },
     {
-      code: "P05",
+      code: "MIS",
       name: "Realiser",
       title: "Executer les activites, controler la qualite et livrer.",
-      parentProcessId: null,
       orderInParent: 5,
+      processType: "internal",
       objectives: md(["- Executer les taches.", "- Controler la qualite.", "- Livrer conformement aux engagements."]),
-      stakeholders: ["Operations", "Qualite", "Client"],
-      referenceDocuments: [{ code: "DOC-REA-001", title: "Instruction de travail - modele", type: "DOCX", url: urlDoc("docs/instruction-travail.docx") }],
+      objectivesBlocks: [],
+      referenceDocuments: [],
+      cartoSlot: "value_chain",
+      cartoOrder: 5,
+      stakeholderNames: ["Operations", "Client"],
     },
     {
-      code: "P06",
+      code: "VLD",
       name: "Valider",
       title: "Recetter, valider et cloturer.",
-      parentProcessId: null,
       orderInParent: 6,
+      processType: "internal",
       objectives: md(["- Preparer et executer la recette.", "- Valider la conformite.", "- Capitaliser et cloturer."]),
-      stakeholders: ["Qualite", "Client", "Programme"],
-      referenceDocuments: [
-        { code: "DOC-VAL-001", title: "PV de recette - modele", type: "DOCX", url: urlDoc("docs/pv-recette.docx") },
-        { code: "DOC-VAL-002", title: "RETEX - modele", type: "DOCX", url: urlDoc("docs/retex.docx") },
-      ],
+      objectivesBlocks: [],
+      referenceDocuments: [],
+      cartoSlot: "value_chain",
+      cartoOrder: 6,
+      stakeholderNames: ["Programme", "Client"],
     },
   ];
 
   const roots = await Process.bulkCreate(
-    rootsPayload.map(({ stakeholders, ...p }) => p),
+    rootsPayload.map(({ stakeholderNames: _s, pilotNames: _p, cartoSlot: _cs, cartoOrder: _co, ...p }) => p),
     { returning: true }
   );
 
-  // Attach stakeholders
-  for (const p of rootsPayload) {
-    const created = roots.find((x) => x.code === p.code);
-    if (created) await setStakeholders(created, p.stakeholders);
+  // Create CartographyLayout entries
+  for (const rp of rootsPayload) {
+    const proc = roots.find((r) => r.code === rp.code);
+    if (proc && rp.cartoSlot) {
+      await CartographyLayout.create({
+        slotKey: rp.cartoSlot,
+        slotOrder: rp.cartoOrder,
+        processId: proc.id,
+        isActive: true,
+      });
+    }
+  }
+
+  // Create CartographyPanelConfig (mode: "all" = show all stakeholders)
+  await CartographyPanelConfig.destroy({ where: {} }).catch(() => {});
+  await CartographyPanelConfig.bulkCreate([
+    { panelKey: "left_panel", mode: "all" },
+    { panelKey: "right_panel", mode: "all" },
+  ]).catch(() => {});
+
+  // Attach stakeholders to root processes
+  for (const rp of rootsPayload) {
+    const proc = roots.find((r) => r.code === rp.code);
+    if (!proc) continue;
+    for (const sName of rp.stakeholderNames || []) {
+      const s = stk(sName);
+      if (s) await ProcessStakeholder.create({ processId: proc.id, stakeholderId: s.id });
+    }
+    // Attach pilots
+    for (const pName of rp.pilotNames || []) {
+      const p = pilotByName(pName);
+      if (p) await proc.addPilot(p);
+    }
   }
 
   const byCode = (list, code) => list.find((x) => x.code === code);
+  const MNGT = byCode(roots, "MNGT");
+  const VEN = byCode(roots, "VEN");
+  const PLA = byCode(roots, "PLA");
+  const PROG = byCode(roots, "PROG");
+  const MIS = byCode(roots, "MIS");
+  const VLD = byCode(roots, "VLD");
 
-  const P01 = byCode(roots, "P01");
-  const P02 = byCode(roots, "P02");
-  const P03 = byCode(roots, "P03");
-  const P04 = byCode(roots, "P04");
-  const P05 = byCode(roots, "P05");
-  const P06 = byCode(roots, "P06");
-
-  console.log("[seed] root processes created");
+  console.log("[seed] root processes + cartography layout created");
 
   const getParentId = (process) => {
-    if (!process) {
-      console.error("[seed] Parent process not found!");
-      return null;
-    }
-    const id = process.id || process.dataValues?.id || process.get?.("id");
-    if (!id) {
-      console.error(`[seed] Cannot get ID for ${process.code}`);
-      return null;
-    }
-    return String(id);
+    if (!process) return null;
+    return String(process.id || process.dataValues?.id || process.get?.("id"));
   };
 
-  // --- Sous-processus ---
+  // ─── SUB-PROCESSES ──────────────────────────────────────────
   const subsPayload = [
-    { code: "SP0101", name: "Definir la strategie", title: "Formaliser la strategie et les objectifs.", parentProcessId: getParentId(P01), orderInParent: 1, stakeholders: ["Direction"] },
-    { code: "SP0102", name: "Piloter les finances", title: "Suivre le budget, tresorerie, investissements.", parentProcessId: getParentId(P01), orderInParent: 2, stakeholders: ["Finance"] },
-    { code: "SP0103", name: "Piloter les Ressources Humaines", title: "Gerer les effectifs, competences, charge/capacite.", parentProcessId: getParentId(P01), orderInParent: 3, stakeholders: ["RH"] },
-    { code: "SP0201", name: "Prospecter", title: "Identifier et contacter des prospects.", parentProcessId: getParentId(P02), orderInParent: 1, stakeholders: ["Commercial"] },
-    { code: "SP0202", name: "Qualifier", title: "Qualifier les besoins et la faisabilite.", parentProcessId: getParentId(P02), orderInParent: 2, stakeholders: ["Commercial", "Avant-vente"] },
-    { code: "SP0203", name: "Contractualiser", title: "Negocier et finaliser le contrat.", parentProcessId: getParentId(P02), orderInParent: 3, stakeholders: ["Commercial", "ADV", "Juridique"] },
-    { code: "SP0301", name: "Collecter les demandes", title: "Collecter et consolider les besoins.", parentProcessId: getParentId(P03), orderInParent: 1, stakeholders: ["Programme"] },
-    { code: "SP0302", name: "Allouer les ressources", title: "Allouer capacite et moyens.", parentProcessId: getParentId(P03), orderInParent: 2, stakeholders: ["RH", "Operations"] },
-    { code: "SP0303", name: "Valider le planning", title: "Arbitrer et publier un planning.", parentProcessId: getParentId(P03), orderInParent: 3, stakeholders: ["Direction", "Programme"] },
-    { code: "SP0401", name: "Gouvernance", title: "Organiser comites et decisions.", parentProcessId: getParentId(P04), orderInParent: 1, stakeholders: ["PMO", "Direction"] },
-    { code: "SP0402", name: "Suivi KPI", title: "Suivre indicateurs et performance.", parentProcessId: getParentId(P04), orderInParent: 2, stakeholders: ["PMO", "Qualite"] },
-    { code: "SP0403", name: "Gestion des Menaces", title: "Identifier, traiter et suivre les Menaces.", parentProcessId: getParentId(P04), orderInParent: 3, stakeholders: ["PMO", "Operations"] },
-    { code: "SP0501", name: "Executer", title: "Realiser les activites prevues.", parentProcessId: getParentId(P05), orderInParent: 1, stakeholders: ["Operations"] },
-    { code: "SP0502", name: "Controler la qualite", title: "Controler conformite et traiter non-conformites.", parentProcessId: getParentId(P05), orderInParent: 2, stakeholders: ["Qualite", "Operations"] },
-    { code: "SP0503", name: "Livrer", title: "Preparer et livrer le resultat.", parentProcessId: getParentId(P05), orderInParent: 3, stakeholders: ["Operations", "Client"] },
-    { code: "SP0601", name: "Recetter", title: "Preparer et executer la recette.", parentProcessId: getParentId(P06), orderInParent: 1, stakeholders: ["Qualite", "Client"] },
-    { code: "SP0602", name: "Valider conformite", title: "Valider conformite et accepter.", parentProcessId: getParentId(P06), orderInParent: 2, stakeholders: ["Qualite", "Client"] },
-    { code: "SP0603", name: "Cloturer", title: "Cloturer et capitaliser.", parentProcessId: getParentId(P06), orderInParent: 3, stakeholders: ["Programme", "Qualite"] },
+    // MNGT children
+    { code: "MNGT-SP01", name: "Definir la strategie", title: "Formaliser la strategie et les objectifs.", parentProcessId: getParentId(MNGT), orderInParent: 1, processType: "internal", stakeholderNames: ["Direction"] },
+    { code: "MNGT-SP02", name: "Piloter les finances", title: "Suivre le budget, tresorerie, investissements.", parentProcessId: getParentId(MNGT), orderInParent: 2, processType: "internal", stakeholderNames: ["Finance"] },
+    { code: "MNGT-SP03", name: "Piloter les Ressources Humaines", title: "Gerer les effectifs, competences, charge/capacite.", parentProcessId: getParentId(MNGT), orderInParent: 3, processType: "internal", stakeholderNames: ["RH"] },
+    // VEN children
+    { code: "VEN-SP0201", name: "Prospecter", title: "Identifier et contacter des prospects.", parentProcessId: getParentId(VEN), orderInParent: 1, processType: "internal", stakeholderNames: ["Commercial"] },
+    { code: "VEN-SP0202", name: "Qualifier", title: "Qualifier les besoins et la faisabilite.", parentProcessId: getParentId(VEN), orderInParent: 2, processType: "internal", stakeholderNames: ["Commercial", "Avant-vente"] },
+    { code: "VEN-SP0203", name: "Contractualiser", title: "Negocier et finaliser le contrat.", parentProcessId: getParentId(VEN), orderInParent: 3, processType: "internal", stakeholderNames: ["Commercial", "Juridique", "ADV"] },
+    // PLA children
+    { code: "PLA-SP0301", name: "Collecter les demandes", title: "Collecter et consolider les besoins.", parentProcessId: getParentId(PLA), orderInParent: 1, processType: "internal", stakeholderNames: ["Programme"] },
+    { code: "PLA-SP0302", name: "Allouer les ressources", title: "Allouer capacite et moyens.", parentProcessId: getParentId(PLA), orderInParent: 2, processType: "internal", stakeholderNames: ["RH", "Operations"] },
+    { code: "PLA-SP0303", name: "Valider le planning", title: "Arbitrer et publier un planning.", parentProcessId: getParentId(PLA), orderInParent: 3, processType: "internal", stakeholderNames: ["Direction", "Programme"] },
+    // PROG children
+    { code: "SP0401", name: "Gouvernance", title: "Organiser comites et decisions.", parentProcessId: getParentId(PROG), orderInParent: 1, processType: "internal", stakeholderNames: ["Direction", "PMO"], pilotNames: ["Enzo AIME"] },
+    { code: "SP0402", name: "Suivi KPI", title: "Suivre indicateurs et performance.", parentProcessId: getParentId(PROG), orderInParent: 2, processType: "internal", stakeholderNames: ["PMO"] },
+    { code: "SP0403", name: "Gestion des risques", title: "Identifier, traiter et suivre les risques.", parentProcessId: getParentId(PROG), orderInParent: 3, processType: "internal", stakeholderNames: ["PMO", "Operations"] },
+    // MIS children
+    { code: "SP0501", name: "Executer", title: "Realiser les activites prevues.", parentProcessId: getParentId(MIS), orderInParent: 1, processType: "internal", stakeholderNames: ["Operations"] },
+    { code: "SP0502", name: "Controler la qualite", title: "Controler conformite et traiter non-conformites.", parentProcessId: getParentId(MIS), orderInParent: 2, processType: "internal", stakeholderNames: ["Operations"] },
+    { code: "SP0503", name: "Livrer", title: "Preparer et livrer le resultat.", parentProcessId: getParentId(MIS), orderInParent: 3, processType: "internal", stakeholderNames: ["Operations", "Client"] },
+    // VLD children
+    { code: "SP0601", name: "Recetter", title: "Preparer et executer la recette.", parentProcessId: getParentId(VLD), orderInParent: 1, processType: "internal", stakeholderNames: ["Client"], pilotNames: ["Gérard Philippe"] },
+    { code: "SP0602", name: "Valider conformite", title: "Valider conformite et accepter.", parentProcessId: getParentId(VLD), orderInParent: 2, processType: "internal", stakeholderNames: ["Client"] },
+    { code: "SP0603", name: "Cloturer", title: "Cloturer et capitaliser.", parentProcessId: getParentId(VLD), orderInParent: 3, processType: "internal", stakeholderNames: ["Programme"] },
   ];
 
   const subs = await Process.bulkCreate(
-    subsPayload.map(({ stakeholders, ...p }) => p),
+    subsPayload.map(({ stakeholderNames: _s, pilotNames: _p, ...p }) => p),
     { returning: true }
   );
 
-  for (const p of subsPayload) {
-    const created = subs.find((x) => x.code === p.code);
-    if (created) await setStakeholders(created, p.stakeholders);
+  // Attach stakeholders & pilots to sub-processes
+  for (const sp of subsPayload) {
+    const proc = subs.find((x) => x.code === sp.code);
+    if (!proc) continue;
+    for (const sName of sp.stakeholderNames || []) {
+      const s = stk(sName);
+      if (s) await ProcessStakeholder.create({ processId: proc.id, stakeholderId: s.id });
+    }
+    for (const pName of sp.pilotNames || []) {
+      const p = pilotByName(pName);
+      if (p) await proc.addPilot(p);
+    }
   }
 
   console.log("[seed] sub-processes created");
 
   const get = (code) => [...roots, ...subs].find((p) => p.code === code);
 
-  // --- SIPOC Data (by phases) ---
+  // ─── SIPOC DATA ─────────────────────────────────────────────
   const SIPOC_DATA = {
-    P01: {
+    MNGT: {
       phases: [
         {
           key: "P01-PH1",
           name: "Phase 1 - Cadrer",
           rows: [
-            { ref: "MAN-01", phase: "Phase 1 - Cadrer", processusFournisseur: "Direction", entrees: "Contexte / donnees", numero: "1", ressources: "Tableaux de bord", designation: { name: "Analyser le contexte", url: urlDoc("sipoc/manager/analyser") }, sorties: "Diagnostic", processusClient: "Direction" },
-            { ref: "MAN-02", phase: "Phase 1 - Cadrer", processusFournisseur: "Direction", entrees: "Diagnostic", numero: "2", ressources: "Ateliers", designation: { name: "Definir la strategie", url: urlProcess("SP0101") }, sorties: "Strategie", processusClient: "Direction" },
-            { ref: "MAN-03", phase: "Phase 1 - Cadrer", processusFournisseur: "Direction", entrees: "Strategie", numero: "3", ressources: "OKR", designation: { name: "Fixer objectifs", url: urlDoc("sipoc/manager/objectifs") }, sorties: "Objectifs", processusClient: "Programme" },
-          ],
-        },
-        {
-          key: "P01-PH2",
-          name: "Phase 2 - Piloter",
-          rows: [
-            { ref: "MAN-04", phase: "Phase 2 - Piloter", processusFournisseur: "RH", entrees: "Objectifs", numero: "4", ressources: "Plan de charge", designation: { name: "Ajuster charge/capacite", url: urlProcess("SP0103") }, sorties: "Capacite validee", processusClient: "Operations" },
-            { ref: "MAN-05", phase: "Phase 2 - Piloter", processusFournisseur: "Finance", entrees: "Objectifs", numero: "5", ressources: "Budget", designation: { name: "Piloter finances", url: urlProcess("SP0102") }, sorties: "Budget suivi", processusClient: "Direction" },
-            { ref: "MAN-06", phase: "Phase 2 - Piloter", processusFournisseur: "Qualite", entrees: "Indicateurs", numero: "6", ressources: "Revue", designation: { name: "Revue de direction", url: urlDoc("sipoc/manager/revue") }, sorties: "Decisions", processusClient: "Direction" },
-          ],
-        },
-        {
-          key: "P01-PH3",
-          name: "Phase 3 - Ameliorer & Conformer",
-          rows: [
-            { ref: "MAN-07", phase: "Phase 3 - Ameliorer & Conformer", processusFournisseur: "Qualite", entrees: "Decisions", numero: "7", ressources: "Plan d'actions", designation: { name: "Amelioration continue", url: urlDoc("sipoc/manager/amelioration") }, sorties: "Actions", processusClient: "Tous" },
-            { ref: "MAN-08", phase: "Phase 3 - Ameliorer & Conformer", processusFournisseur: "Qualite", entrees: "Docs", numero: "8", ressources: "GED", designation: { name: "Gerer la documentation", url: urlDoc("sipoc/manager/docs") }, sorties: "Docs a jour", processusClient: "Tous" },
-            { ref: "MAN-09", phase: "Phase 3 - Ameliorer & Conformer", processusFournisseur: "Direction", entrees: "Prescriptions", numero: "9", ressources: "Dossier licence", designation: { name: "Maintenir la licence", url: urlDoc("sipoc/manager/licence") }, sorties: "Conformite", processusClient: "Autorite" },
+            { ref: "MAN-01", phase: "Phase 1 - Cadrer", processusFournisseur: "Direction", entrees: "Contexte / données", numero: "1", ressources: "Tableaux de bord", designation: { name: "Analyser le contexte", url: urlDoc("sipoc/manager/analyser") }, sorties: "Diagnostic", processusClient: "Direction", raci_r: "Essai 1", raci_a: "Essai 2", raci_c: "Essai 3", raci_i: "Essai 4" },
+            { ref: "MAN-02", phase: "Phase 1 - Cadrer", processusFournisseur: "Direction", entrees: "Diagnostic", numero: "2", ressources: "Ateliers", designation: { name: "Definir la strategie", url: urlProcess("MNGT-SP01") }, sorties: "Strategie", processusClient: "Direction", raci_r: "Essai 1", raci_a: "Essai 2", raci_c: "Essai 3", raci_i: "Essai 4" },
+            { ref: "MAN-03", phase: "Phase 1 - Cadrer", processusFournisseur: "Direction", entrees: "Stratégie", numero: "3", ressources: "OKR", designation: { name: "Fixer objectifs", url: urlDoc("sipoc/manager/objectifs") }, sorties: "Objectifs", processusClient: "Programme", raci_r: "Essai 1", raci_a: "Essai 2", raci_c: "Essai 3", raci_i: "Essai 4" },
           ],
         },
       ],
     },
 
-    P02: {
+    VEN: {
       phases: [
         {
           key: "P02-PH1",
           name: "Phase 1 - Prospection",
           rows: [
-            { ref: "VEN-01", phase: "Phase 1 - Prospection", processusFournisseur: "Marketing", entrees: "Leads", numero: "1", ressources: "CRM", designation: { name: "Prospecter", url: urlProcess("SP0201") }, sorties: "Leads qualifies", processusClient: "Commercial" },
+            { ref: "VEN-01", phase: "Phase 1 - Prospection", processusFournisseur: "Marketing", entrees: "Leads", numero: "1", ressources: "CRM", designation: { name: "Prospecter", url: urlProcess("VEN-SP0201") }, sorties: "Leads qualifies", processusClient: "Commercial" },
           ],
         },
         {
           key: "P02-PH2",
           name: "Phase 2 - Qualification & Offre",
           rows: [
-            { ref: "VEN-02", phase: "Phase 2 - Qualification & Offre", processusFournisseur: "Commercial", entrees: "Leads qualifies", numero: "2", ressources: "Script / Email", designation: { name: "Qualifier", url: urlProcess("SP0202") }, sorties: "Besoin clarifie", processusClient: "Avant-vente" },
-            { ref: "VEN-03", phase: "Phase 2 - Qualification & Offre", processusFournisseur: "Avant-vente", entrees: "Besoin clarifie", numero: "3", ressources: "Catalogue", designation: { name: "Construire l'offre", url: urlDoc("sipoc/vendre/offre") }, sorties: "Offre envoyee", processusClient: "Client" },
+            { ref: "VEN-02", phase: "Phase 2 - Qualification & Offre", processusFournisseur: "Commercial", entrees: "Leads qualifiés", numero: "2", ressources: "Script / Email", designation: { name: "Qualifier", url: urlProcess("VEN-SP0202") }, sorties: "Besoin clarifie", processusClient: "Avant-vente" },
+            { ref: "VEN-03", phase: "Phase 2 - Qualification & Offre", processusFournisseur: "Avant-vente", entrees: "Besoin clarifié", numero: "3", ressources: "Catalogue", designation: { name: "Construire l'offre", url: urlDoc("sipoc/vendre/offre") }, sorties: "Offre envoyee", processusClient: "Client" },
           ],
         },
         {
           key: "P02-PH3",
           name: "Phase 3 - Negociation & Contrat",
           rows: [
-            { ref: "VEN-04", phase: "Phase 3 - Negociation & Contrat", processusFournisseur: "Client", entrees: "Offre envoyee", numero: "4", ressources: "Reunions", designation: { name: "Negocier", url: urlDoc("sipoc/vendre/negocier") }, sorties: "Accord", processusClient: "Commercial" },
-            { ref: "VEN-05", phase: "Phase 3 - Negociation & Contrat", processusFournisseur: "Commercial", entrees: "Accord", numero: "5", ressources: "Contrat", designation: { name: "Contractualiser", url: urlProcess("SP0203") }, sorties: "Contrat signe", processusClient: "ADV" },
+            { ref: "VEN-04", phase: "Phase 3 - Negociation & Contrat", processusFournisseur: "Client", entrees: "Offre envoyée", numero: "4", ressources: "Reunions", designation: { name: "Negocier", url: urlDoc("sipoc/vendre/negocier") }, sorties: "Accord", processusClient: "Commercial" },
+            { ref: "VEN-05", phase: "Phase 3 - Negociation & Contrat", processusFournisseur: "Commercial", entrees: "Accord", numero: "5", ressources: "Contrat", designation: { name: "Contractualiser", url: urlProcess("VEN-SP0203") }, sorties: "Contrat signe", processusClient: "ADV" },
             { ref: "VEN-06", phase: "Phase 3 - Negociation & Contrat", processusFournisseur: "ADV", entrees: "Contrat signe", numero: "6", ressources: "ERP", designation: { name: "Creer la commande", url: urlDoc("sipoc/vendre/commande") }, sorties: "Commande creee", processusClient: "Planification" },
           ],
         },
       ],
     },
 
-    P03: {
+    PLA: {
       phases: [
         {
           key: "P03-PH1",
           name: "Phase 1 - Collecter & Estimer",
           rows: [
-            { ref: "PLA-01", phase: "Phase 1 - Collecter & Estimer", processusFournisseur: "Ventes", entrees: "Commande / Contrat", numero: "1", ressources: "CRM/ERP", designation: { name: "Collecter les demandes", url: urlProcess("SP0301") }, sorties: "Backlog consolide", processusClient: "Programme" },
+            { ref: "PLA-01", phase: "Phase 1 - Collecter & Estimer", processusFournisseur: "Ventes", entrees: "Commande / Contrat", numero: "1", ressources: "CRM/ERP", designation: { name: "Collecter les demandes", url: urlProcess("PLA-SP0301") }, sorties: "Backlog consolide", processusClient: "Programme" },
             { ref: "PLA-02", phase: "Phase 1 - Collecter & Estimer", processusFournisseur: "Programme", entrees: "Backlog", numero: "2", ressources: "Roadmap", designation: { name: "Estimer la charge", url: urlDoc("sipoc/planifier/estimer") }, sorties: "Charge estimee", processusClient: "RH/Operations" },
           ],
         },
@@ -415,7 +491,7 @@ async function run() {
           key: "P03-PH2",
           name: "Phase 2 - Allouer",
           rows: [
-            { ref: "PLA-03", phase: "Phase 2 - Allouer", processusFournisseur: "RH", entrees: "Charge estimee", numero: "3", ressources: "Capacite", designation: { name: "Allouer les ressources", url: urlProcess("SP0302") }, sorties: "Capacite allouee", processusClient: "Programme" },
+            { ref: "PLA-03", phase: "Phase 2 - Allouer", processusFournisseur: "RH", entrees: "Charge estimee", numero: "3", ressources: "Capacite", designation: { name: "Allouer les ressources", url: urlProcess("PLA-SP0302") }, sorties: "Capacite allouee", processusClient: "Programme" },
           ],
         },
         {
@@ -423,13 +499,13 @@ async function run() {
           name: "Phase 3 - Construire & Valider",
           rows: [
             { ref: "PLA-04", phase: "Phase 3 - Construire & Valider", processusFournisseur: "Programme", entrees: "Capacite allouee", numero: "4", ressources: "Planning", designation: { name: "Construire le planning", url: urlDoc("sipoc/planifier/planning") }, sorties: "Planning propose", processusClient: "Direction" },
-            { ref: "PLA-05", phase: "Phase 3 - Construire & Valider", processusFournisseur: "Direction", entrees: "Planning propose", numero: "5", ressources: "Comite", designation: { name: "Valider le planning", url: urlProcess("SP0303") }, sorties: "Planning valide", processusClient: "Tous" },
+            { ref: "PLA-05", phase: "Phase 3 - Construire & Valider", processusFournisseur: "Direction", entrees: "Planning propose", numero: "5", ressources: "Comite", designation: { name: "Valider le planning", url: urlProcess("PLA-SP0303") }, sorties: "Planning valide", processusClient: "Tous" },
           ],
         },
       ],
     },
 
-    P04: {
+    PROG: {
       phases: [
         {
           key: "P04-PH1",
@@ -443,20 +519,20 @@ async function run() {
           name: "Phase 2 - Pilotage",
           rows: [
             { ref: "PROG-02", phase: "Phase 2 - Pilotage", processusFournisseur: "Programme", entrees: "Rituels", numero: "2", ressources: "Tableaux", designation: { name: "Suivre les KPI", url: urlProcess("SP0402") }, sorties: "KPI a jour", processusClient: "Direction" },
-            { ref: "PROG-03", phase: "Phase 2 - Pilotage", processusFournisseur: "Programme", entrees: "KPI", numero: "3", ressources: "Registre", designation: { name: "Gerer les Menaces", url: urlProcess("SP0403") }, sorties: "Menaces traites", processusClient: "Direction" },
+            { ref: "PROG-03", phase: "Phase 2 - Pilotage", processusFournisseur: "Programme", entrees: "KPI", numero: "3", ressources: "Registre", designation: { name: "Gerer les risques", url: urlProcess("SP0403") }, sorties: "Risques traites", processusClient: "Direction" },
           ],
         },
         {
           key: "P04-PH3",
           name: "Phase 3 - Arbitrage",
           rows: [
-            { ref: "PROG-04", phase: "Phase 3 - Arbitrage", processusFournisseur: "Direction", entrees: "Menaces", numero: "4", ressources: "Arbitrage", designation: { name: "Decider / arbitrer", url: urlDoc("sipoc/programme/arbitrer") }, sorties: "Decisions", processusClient: "Tous" },
+            { ref: "PROG-04", phase: "Phase 3 - Arbitrage", processusFournisseur: "Direction", entrees: "Risques", numero: "4", ressources: "Arbitrage", designation: { name: "Decider / arbitrer", url: urlDoc("sipoc/programme/arbitrer") }, sorties: "Decisions", processusClient: "Tous" },
           ],
         },
       ],
     },
 
-    P05: {
+    MIS: {
       phases: [
         {
           key: "P05-PH1",
@@ -484,7 +560,7 @@ async function run() {
       ],
     },
 
-    P06: {
+    VLD: {
       phases: [
         {
           key: "P06-PH1",
@@ -512,9 +588,9 @@ async function run() {
     },
   };
 
-  // --- SIPOC for sub-processes ---
+  // ─── SUB-PROCESS SIPOC DATA ──────────────────────────────────
   const SUB_SIPOC_DATA = {
-    SP0201: {
+    "VEN-SP0201": {
       phases: [
         {
           key: "SP0201-PH1",
@@ -522,12 +598,12 @@ async function run() {
           rows: [
             { ref: "Spros-01", processusFournisseur: "Marketing", entrees: "Cibles", numero: "1", ressources: "CRM", designation: { name: "Identifier des cibles", url: urlDoc("sipoc/sp0201/cibles") }, sorties: "Liste cibles", processusClient: "Commercial" },
             { ref: "Spros-02", processusFournisseur: "Commercial", entrees: "Liste cibles", numero: "2", ressources: "Email/Tel", designation: { name: "Contacter", url: urlDoc("sipoc/sp0201/contacter") }, sorties: "Contact etabli", processusClient: "Commercial" },
-            { ref: "Spros-03", processusFournisseur: "Commercial", entrees: "Contact", numero: "3", ressources: "Script", designation: { name: "Qualifier rapidement", url: urlProcess("SP0202") }, sorties: "Lead qualifie", processusClient: "Avant-vente" },
+            { ref: "Spros-03", processusFournisseur: "Commercial", entrees: "Contact", numero: "3", ressources: "Script", designation: { name: "Qualifier rapidement", url: urlProcess("VEN-SP0202") }, sorties: "Lead qualifie", processusClient: "Avant-vente" },
           ],
         },
       ],
     },
-    SP0202: {
+    "VEN-SP0202": {
       phases: [
         {
           key: "SP0202-PH1",
@@ -540,7 +616,7 @@ async function run() {
         },
       ],
     },
-    SP0203: {
+    "VEN-SP0203": {
       phases: [
         {
           key: "SP0203-PH1",
@@ -553,7 +629,7 @@ async function run() {
         },
       ],
     },
-    SP0301: {
+    "PLA-SP0301": {
       phases: [
         {
           key: "SP0301-PH1",
@@ -566,7 +642,7 @@ async function run() {
         },
       ],
     },
-    SP0302: {
+    "PLA-SP0302": {
       phases: [
         {
           key: "SP0302-PH1",
@@ -579,7 +655,7 @@ async function run() {
         },
       ],
     },
-    SP0303: {
+    "PLA-SP0303": {
       phases: [
         {
           key: "SP0303-PH1",
@@ -633,7 +709,7 @@ async function run() {
     },
   };
 
-  // 1) Create SIPOC + logigramme for root processes
+  // ─── CREATE SIPOC + LOGIGRAMME FOR ROOT PROCESSES ────────────
   console.log("[seed] creating SIPOC for root processes...");
   for (const root of roots) {
     const conf = SIPOC_DATA[root.code];
@@ -642,10 +718,7 @@ async function run() {
     const phases = conf.phases || [];
     const flatRows = phases.flatMap((p) => p.rows || []);
 
-    // Create SIPOC in normalized tables
     await createSipocForProcess(root.id, phases);
-
-    // Update logigramme
     await root.update({
       logigramme: buildLogigrammeFromSipoc(flatRows),
     });
@@ -653,15 +726,35 @@ async function run() {
     console.log(`  [seed] SIPOC created for ${root.code} (${phases.length} phases, ${flatRows.length} rows)`);
   }
 
-  // 1.b) Custom logigramme for P04 (Visio-like)
-  const p04 = roots.find((p) => p.code === "P04");
-  if (p04) {
-    const conf = SIPOC_DATA["P04"];
-    const phases = conf?.phases || [];
-    const rows = phases.flatMap((p) => p.rows || []);
-
+  // Custom logigramme for MNGT (positions éditées manuellement)
+  const mngt = roots.find((p) => p.code === "MNGT");
+  if (mngt) {
+    const conf = SIPOC_DATA["MNGT"];
+    const rows = (conf?.phases || []).flatMap((p) => p.rows || []);
     if (rows.length) {
-      const lg = buildLogigrammeFromSipoc(rows, { startX: 120, startY: 80, colWidth: 320, rowHeight: 140, wrapAt: 4 });
+      const lg = buildLogigrammeFromSipoc(rows);
+      // Apply custom positions matching user's edited logigramme
+      const positions = {
+        "MAN-01": { x: -220, y: 160 },
+        "MAN-02": { x: -220, y: 500 },
+        "MAN-03": { x: 80, y: 280 },
+      };
+      lg.nodes = lg.nodes.map((n) => ({
+        ...n,
+        position: positions[n.id] || n.position,
+        interaction: null,
+      }));
+      await mngt.update({ logigramme: lg });
+    }
+  }
+
+  // Custom logigramme for PROG (Visio-like with diamond)
+  const prog = roots.find((p) => p.code === "PROG");
+  if (prog) {
+    const conf = SIPOC_DATA["PROG"];
+    const rows = (conf?.phases || []).flatMap((p) => p.rows || []);
+    if (rows.length) {
+      const lg = buildLogigrammeFromSipoc(rows);
 
       const pos = {
         "PROG-01": { x: 520, y: 20 },
@@ -672,7 +765,7 @@ async function run() {
 
       lg.nodes = (lg.nodes || []).map((n) => {
         const id = String(n.id);
-        const p = pos[id] || n.position || { x: 0, y: 0 };
+        const p = pos[id] || n.position;
         const isTop = id === "PROG-01";
         return {
           ...n,
@@ -706,11 +799,11 @@ async function run() {
         { key: "6.", label: "Valider", bg: "#dcfce7", color: "#111827" },
       ];
 
-      await p04.update({ logigramme: lg });
+      await prog.update({ logigramme: lg });
     }
   }
 
-  // 2) Create SIPOC for sub-processes
+  // ─── CREATE SIPOC + LOGIGRAMME FOR SUB-PROCESSES ─────────────
   console.log("[seed] creating SIPOC for sub-processes...");
   for (const sub of subs) {
     const conf = SUB_SIPOC_DATA[sub.code];
@@ -719,10 +812,7 @@ async function run() {
     const phases = conf.phases || [];
     const flatRows = phases.flatMap((p) => p.rows || []);
 
-    // Create SIPOC in normalized tables
     await createSipocForProcess(sub.id, phases);
-
-    // Update logigramme
     await sub.update({
       logigramme: buildLogigrammeFromSipoc(flatRows, { wrapAt: 3 }),
     });
@@ -730,17 +820,20 @@ async function run() {
     console.log(`  [seed] SIPOC created for ${sub.code} (${phases.length} phases, ${flatRows.length} rows)`);
   }
 
-  // Summary
+  // ─── SUMMARY ────────────────────────────────────────────────
   const totalSipocs = await Sipoc.count();
   const totalPhases = await SipocPhase.count();
   const totalRows = await SipocRow.count();
 
   console.log("\n[seed] SUMMARY:");
+  console.log(`  - Users: ${await User.count()}`);
+  console.log(`  - Pilots: ${await Pilot.count()}`);
   console.log(`  - Processes: ${roots.length + subs.length}`);
   console.log(`  - SIPOCs: ${totalSipocs}`);
   console.log(`  - SIPOC Phases: ${totalPhases}`);
   console.log(`  - SIPOC Rows: ${totalRows}`);
   console.log(`  - Stakeholders: ${await Stakeholder.count()}`);
+  console.log(`  - CartographyLayouts: ${await CartographyLayout.count()}`);
 
   console.log("\n[seed] done");
   await sequelize.close();
